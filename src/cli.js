@@ -14,6 +14,7 @@ import { formatBullets, renderTemplate } from "./lib/template.js";
 import { normalizeRunnerList, resolveNodeRole, resolveRoleRunnerPick, runRunnerCommand } from "./lib/runner.js";
 import { acquireSupervisorLock, heartbeatSupervisorLock, readSupervisorLock, releaseSupervisorLock } from "./lib/lock.js";
 import { createUi } from "./lib/ui.js";
+import { sqliteExec } from "./lib/db/sqlite3.js";
 
 function usage() {
   return `choreo
@@ -423,6 +424,7 @@ async function initCommand(rootDir, flags) {
   await ensureDir(paths.memoryDir);
   await ensureDir(paths.templatesDir);
   await ensureDir(paths.tmpDir);
+  await ensureDir(paths.artifactsDir);
 
   const goalExists = await pathExists(paths.goalPath);
   if (goalFlag) {
@@ -470,6 +472,21 @@ async function initCommand(rootDir, flags) {
   if (touchedConfig || !(await pathExists(paths.configPath))) {
     await saveConfig(paths.configPath, config);
   }
+
+  if (force) {
+    await rm(paths.dbPath, { force: true });
+  }
+
+  const schemaUrl = new URL("./lib/db/schema.sql", import.meta.url);
+  const schemaSql = await readFile(schemaUrl, "utf8");
+  await sqliteExec(paths.dbPath, schemaSql);
+  const now = nowIso();
+  const nowSql = `'${now.replace(/'/g, "''")}'`;
+  await sqliteExec(
+    paths.dbPath,
+    `INSERT OR IGNORE INTO nodes(id, title, type, status, created_at, updated_at)\n` +
+      `VALUES('plan-000','Plan','plan','open',${nowSql},${nowSql});\n`,
+  );
 
   if (force || !(await pathExists(paths.graphPath))) {
     const graph = defaultWorkgraph("GOAL.md", goalHash);
