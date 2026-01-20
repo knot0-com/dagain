@@ -45,6 +45,7 @@ Usage:
   choreo kv get [--run] [--node=<id>] --key=<k> [--json]
   choreo kv put [--run] [--node=<id>] --key=<k> --value="..." [--allow-cross-node-write]
   choreo kv ls [--run] [--node=<id>] [--prefix=<p>] [--json]
+  choreo microcall --prompt="..." [--runner=<name>] [--role=<role>] [--store-key=<k>] [--run] [--json]
   choreo stop [--signal=<sig>]
   choreo graph validate
 
@@ -2372,6 +2373,11 @@ export async function main(argv) {
     return;
   }
 
+  if (command === "microcall") {
+    await microcallCommand(rootDir, flags);
+    return;
+  }
+
   if (command === "stop") {
     await stopCommand(rootDir, flags);
     return;
@@ -2661,6 +2667,93 @@ async function kvCommand(rootDir, positional, flags) {
   }
 
   throw new Error(`Unknown kv subcommand: ${sub}`);
+}
+
+async function microcallCommand(rootDir, flags) {
+  const paths = choreoPaths(rootDir);
+
+  const prompt = typeof flags.prompt === "string" ? flags.prompt.trim() : "";
+  if (!prompt) throw new Error('Missing prompt. Provide `--prompt "..."`.');
+
+  const config = await loadConfig(paths.configPath);
+  if (!config) throw new Error("Missing .choreo/config.json. Run `choreo init` first.");
+
+  const runnerNameFlag = typeof flags.runner === "string" ? flags.runner.trim() : "";
+  const role = typeof flags.role === "string" ? flags.role.trim() : "researcher";
+  const runnerName = runnerNameFlag || resolveRoleRunnerPick(role || "researcher", config, { seed: prompt, attempt: 0 });
+  const runner = config.runners?.[runnerName];
+  if (!runner?.cmd) throw new Error(`Unknown runner: ${runnerName}`);
+
+  const microId = `micro-${runId()}`;
+  const parentRunId = String(process.env.CHOREO_RUN_ID || "").trim();
+  const microcallsBaseDir = parentRunId
+    ? path.join(paths.runsDir, parentRunId, "microcalls")
+    : path.join(paths.choreoDir, "microcalls");
+  const microDir = path.join(microcallsBaseDir, microId);
+  await ensureDir(microDir);
+
+  const packetPath = path.join(microDir, "packet.md");
+  const stdoutPath = path.join(microDir, "stdout.log");
+  const resultPath = path.join(microDir, "result.json");
+
+  const template = await resolveTemplate(rootDir, "microcall");
+  const packet = renderTemplate(template, {
+    REPO_ROOT: paths.rootDir,
+    MICROCALL_PROMPT: prompt,
+  });
+  await writeFile(packetPath, packet, "utf8");
+
+  const spawnIdentity = await resolveSpawnIdentity({ rootDir: paths.rootDir });
+  const identityEnv = envForIdentity(spawnIdentity);
+  const runnerEnv = mergeEnv(resolveRunnerEnv({ runnerName, runner, cwd: paths.rootDir, paths }), identityEnv);
+  await ensureRunnerTmpDir(runnerEnv);
+  if (runnerName === "claude")
+    await ensureClaudeProjectTmpWritable({ cwd: paths.rootDir, uid: spawnIdentity?.uid ?? null, gid: spawnIdentity?.gid ?? null });
+
+  const execRes = await runRunnerCommand({
+    cmd: runner.cmd,
+    packetPath,
+    cwd: paths.rootDir,
+    logPath: stdoutPath,
+    timeoutMs: Number(runner.timeoutMs ?? 0),
+    env: runnerEnv,
+    uid: spawnIdentity?.uid ?? null,
+    gid: spawnIdentity?.gid ?? null,
+  });
+
+  const stdoutText = await readFile(stdoutPath, "utf8").catch(() => "");
+  const parsed = extractResultJson(stdoutText);
+  if (!parsed) {
+    const code = typeof execRes.code === "number" ? execRes.code : null;
+    const sig = execRes.signal ? String(execRes.signal) : "";
+    throw new Error(
+      `Could not extract result JSON from microcall output${code ? ` (code=${code})` : ""}${sig ? ` (signal=${sig})` : ""}.`,
+    );
+  }
+
+  await writeJsonAtomic(resultPath, parsed);
+
+  const storeKey = typeof flags["store-key"] === "string" ? flags["store-key"].trim() : "";
+  if (storeKey) {
+    const dbPath = String(process.env.CHOREO_DB || paths.dbPath || "").trim();
+    if (!dbPath || !(await pathExists(dbPath))) throw new Error("Missing $CHOREO_DB for --store-key (or run `choreo init`).");
+
+    const storeRunScoped = Boolean(flags.run);
+    const envNodeId = String(process.env.CHOREO_NODE_ID || "").trim();
+    const nodeId = storeRunScoped ? "__run__" : envNodeId;
+    if (!nodeId) throw new Error("Missing $CHOREO_NODE_ID for --store-key (or use --run).");
+
+    await kvPut({
+      dbPath,
+      nodeId,
+      key: storeKey,
+      valueText: JSON.stringify(parsed),
+      runId: parentRunId || null,
+      nowIso: nowIso(),
+    });
+  }
+
+  process.stdout.write(JSON.stringify(parsed, null, 2) + "\n");
 }
 
 function deriveCheckpointIdFromPath(checkpointPathAbs) {
