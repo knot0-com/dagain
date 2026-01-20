@@ -32,6 +32,11 @@ CREATE TABLE IF NOT EXISTS nodes (
 
   checkpoint_json TEXT,
 
+  auto_reset_count INTEGER NOT NULL DEFAULT 0,
+  last_auto_reset_at TEXT,
+  manual_reset_count INTEGER NOT NULL DEFAULT 0,
+  last_manual_reset_at TEXT,
+
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   completed_at TEXT
@@ -78,4 +83,3 @@ CREATE TABLE IF NOT EXISTS kv_history (
 );
 
 CREATE INDEX IF NOT EXISTS idx_kv_history_node_key ON kv_history(node_id, key, id);
-

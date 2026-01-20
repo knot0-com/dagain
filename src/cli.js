@@ -15,7 +15,19 @@ import { formatBullets, renderTemplate } from "./lib/template.js";
 import { normalizeRunnerList, resolveNodeRole, resolveRoleRunnerPick, runRunnerCommand } from "./lib/runner.js";
 import { acquireSupervisorLock, heartbeatSupervisorLock, readSupervisorLock, releaseSupervisorLock } from "./lib/lock.js";
 import { createUi } from "./lib/ui.js";
-import { sqliteExec } from "./lib/db/sqlite3.js";
+import { sqliteExec, sqliteQueryJson } from "./lib/db/sqlite3.js";
+import { exportWorkgraphJson, loadWorkgraphFromDb } from "./lib/db/export.js";
+import {
+  allDoneDb,
+  applyResult as applyResultDb,
+  claimNode,
+  countByStatusDb,
+  getNode,
+  listFailedDepsBlockingOpenNodes,
+  listNodes,
+  selectNextRunnableNode,
+  unlockNode as unlockNodeDb,
+} from "./lib/db/nodes.js";
 
 function usage() {
   return `choreo
@@ -40,6 +52,11 @@ State:
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function sqlQuote(value) {
+  const s = String(value ?? "");
+  return `'${s.replace(/'/g, "''")}'`;
 }
 
 function isPromptEnabled() {
@@ -1173,13 +1190,14 @@ function diagnoseNoRunnableNodes(graph) {
 async function runCommand(rootDir, flags) {
   const paths = choreoPaths(rootDir);
   const config = await loadConfig(paths.configPath);
-  const graph = await loadWorkgraph(paths.graphPath);
   if (!config) throw new Error("Missing .choreo/config.json. Run `choreo init`.");
-  if (!graph) throw new Error("Missing .choreo/workgraph.json. Run `choreo init`.");
-  if (!Array.isArray(graph.nodes) || graph.nodes.length === 0) {
-    process.stderr.write("No nodes in .choreo/workgraph.json. Run `choreo start` (or `choreo init --force`) to seed a plan node.\n");
+  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .choreo/state.sqlite. Run `choreo init`.");
+  const initGraph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+  if (!Array.isArray(initGraph.nodes) || initGraph.nodes.length === 0) {
+    process.stderr.write("No nodes in .choreo/state.sqlite. Run `choreo start` (or `choreo init --force`) to seed a plan node.\n");
     return;
   }
+  await syncTaskPlan({ paths, graph: initGraph });
 
   const once = Boolean(flags.once);
   const dryRun = Boolean(flags["dry-run"]);
@@ -1309,17 +1327,17 @@ async function runCommand(rootDir, flags) {
         }
       }
 
-      const currentGraph = await loadWorkgraph(paths.graphPath);
-      if (!currentGraph) throw new Error("workgraph.json disappeared");
-
-      if (clearStaleLocks(currentGraph, staleLockSeconds)) {
-        await saveWorkgraph(paths.graphPath, currentGraph);
+      const staleUnlocked = await clearStaleLocksDb({ paths, staleLockSeconds });
+      if (staleUnlocked) {
+        const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+        await syncTaskPlan({ paths, graph });
+        continue;
       }
 
-      const scaffold = ensurePlannerScaffolding({ graph: currentGraph, config });
+      const scaffold = await ensurePlannerScaffoldingDb({ paths, config });
       if (scaffold.updated) {
-        await saveWorkgraph(paths.graphPath, currentGraph);
-        await syncTaskPlan({ paths, graph: currentGraph });
+        const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+        await syncTaskPlan({ paths, graph });
         ui.event(
           "info",
           `Planner scaffolding ${
@@ -1331,40 +1349,40 @@ async function runCommand(rootDir, flags) {
         continue;
       }
 
-      const node = selectNextNode(currentGraph);
-      if (!node) {
-        if (allDone(currentGraph)) {
+      const nodeRow = await selectNextRunnableNode({ dbPath: paths.dbPath, nowIso: nowIso() });
+      if (!nodeRow) {
+        if (await allDoneDb({ dbPath: paths.dbPath })) {
           ui.event("done", "All nodes done.");
           return;
         }
         if (once) return;
-        const counts = countByStatus(currentGraph.nodes);
+
+        const counts = await countByStatusDb({ dbPath: paths.dbPath });
         const countsSig = stableCountsSig(counts);
         if (countsSig !== lastCountsSig) {
           lastCountsSig = countsSig;
           ui.event("info", `queue: ${ui.formatCounts(counts)}`);
         }
+
         const needsHuman = Number(counts.needs_human || 0);
         const openCount = Number(counts.open || 0);
         const failedCount = Number(counts.failed || 0);
         const terminalOnly = needsHuman === 0 && openCount === 0 && Number(counts.in_progress || 0) === 0;
-        if (terminalOnly) {
-          if (failedCount > 0) {
-            const failedIds = (Array.isArray(currentGraph.nodes) ? currentGraph.nodes : [])
-              .filter((n) => normalizeStatus(n?.status) === "failed")
-              .map((n) => n.id)
-              .filter(Boolean);
-            ui.event("fail", `No runnable nodes. ${failedCount} node${failedCount === 1 ? "" : "s"} failed.`);
-            if (failedIds.length > 0) ui.detail(`failed: ${failedIds.join(", ")}`);
-            process.exitCode = 1;
-            return;
-          }
+        if (terminalOnly && failedCount > 0) {
+          const failedIds = (
+            await sqliteQueryJson(paths.dbPath, "SELECT id FROM nodes WHERE status='failed' ORDER BY id;")
+          )
+            .map((r) => r.id)
+            .filter(Boolean);
+          ui.event("fail", `No runnable nodes. ${failedCount} node${failedCount === 1 ? "" : "s"} failed.`);
+          if (failedIds.length > 0) ui.detail(`failed: ${failedIds.join(", ")}`);
+          process.exitCode = 1;
+          return;
         }
 
-        const diag = diagnoseNoRunnableNodes(currentGraph);
-        const isBlockedByFailed = diag.failedDeps.length > 0 && openCount > 0;
-        const isBlockedByMissing = diag.missingDeps.length > 0 && openCount > 0;
-        const idleReason = needsHuman > 0 ? "needs_human" : isBlockedByFailed ? "blocked_failed" : isBlockedByMissing ? "blocked_missing" : "idle";
+        const failedDeps = await listFailedDepsBlockingOpenNodes({ dbPath: paths.dbPath });
+        const isBlockedByFailed = failedDeps.length > 0 && openCount > 0;
+        const idleReason = needsHuman > 0 ? "needs_human" : isBlockedByFailed ? "blocked_failed" : "idle";
 
         if (idleReason !== lastIdleReason) {
           lastIdleReason = idleReason;
@@ -1378,12 +1396,7 @@ async function runCommand(rootDir, flags) {
           } else if (idleReason === "blocked_failed") {
             ui.event(
               "fail",
-              `No runnable nodes. ${openCount} open node${openCount === 1 ? "" : "s"} blocked by failed deps: ${diag.failedDeps.join(", ")}`,
-            );
-          } else if (idleReason === "blocked_missing") {
-            ui.event(
-              "fail",
-              `No runnable nodes. ${openCount} open node${openCount === 1 ? "" : "s"} blocked by missing deps: ${diag.missingDeps.join(", ")}`,
+              `No runnable nodes. ${openCount} open node${openCount === 1 ? "" : "s"} blocked by failed deps: ${failedDeps.join(", ")}`,
             );
           }
         }
@@ -1391,21 +1404,18 @@ async function runCommand(rootDir, flags) {
         if (idleReason === "needs_human" && !noPrompt && canPrompt) {
           let answered = false;
           try {
-            answered = await answerNeedsHumanInteractive({ paths, graph: currentGraph, ui, abortSignal });
+            answered = await answerNeedsHumanInteractiveDb({ paths, ui, abortSignal });
           } catch (error) {
             ui.event("warn", `Failed to collect checkpoint answer: ${error?.message || String(error)}`);
           }
           if (answered) continue;
-          // User chose to quit (or aborted). Exit supervisor so the terminal doesn't appear stuck.
           return;
         }
 
         if (idleReason === "blocked_failed") {
-          const nodes = Array.isArray(currentGraph.nodes) ? currentGraph.nodes : [];
-          const byId = new Map(nodes.map((n) => [n.id, n]));
           const toReset = [];
-          for (const depId of diag.failedDeps) {
-            const failedNode = byId.get(depId);
+          for (const depId of failedDeps) {
+            const failedNode = await getNode({ dbPath: paths.dbPath, nodeId: depId });
             if (!failedNode) continue;
             const resetCount = Number(failedNode.autoResetCount || 0);
             if (resetCount >= autoResetFailedMax) continue;
@@ -1415,18 +1425,24 @@ async function runCommand(rootDir, flags) {
           if (toReset.length > 0) {
             const now = nowIso();
             for (const depId of toReset) {
-              const failedNode = byId.get(depId);
-              if (!failedNode) continue;
-              failedNode.status = "open";
-              failedNode.lock = null;
-              failedNode.attempts = 0;
-              failedNode.checkpoint = null;
-              failedNode.autoResetCount = Number(failedNode.autoResetCount || 0) + 1;
-              failedNode.lastAutoResetAt = now;
-              failedNode.updatedAt = now;
+              await sqliteExec(
+                paths.dbPath,
+                `UPDATE nodes\n` +
+                  `SET status='open',\n` +
+                  `    attempts=0,\n` +
+                  `    checkpoint_json=NULL,\n` +
+                  `    lock_run_id=NULL,\n` +
+                  `    lock_started_at=NULL,\n` +
+                  `    lock_pid=NULL,\n` +
+                  `    lock_host=NULL,\n` +
+                  `    auto_reset_count=auto_reset_count+1,\n` +
+                  `    last_auto_reset_at='${now.replace(/'/g, "''")}',\n` +
+                  `    updated_at='${now.replace(/'/g, "''")}'\n` +
+                  `WHERE id='${String(depId).replace(/'/g, "''")}';\n`,
+              );
             }
-            await saveWorkgraph(paths.graphPath, currentGraph);
-            await syncTaskPlan({ paths, graph: currentGraph });
+            const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+            await syncTaskPlan({ paths, graph });
             await appendLine(activityPath, `[${now}] auto-reset failed nodes: ${toReset.join(", ")}`);
 
             const progressPath = path.join(paths.memoryDir, "progress.md");
@@ -1445,39 +1461,39 @@ async function runCommand(rootDir, flags) {
             const rl = createInterface({ input: process.stdin, output: process.stdout });
             let choice = "";
             try {
-              const prompt = `Retry failed deps again? (${diag.failedDeps.join(", ")}) [y/N]: `;
+              const prompt = `Retry failed deps again? (${failedDeps.join(", ")}) [y/N]: `;
               choice = (await rl.question(prompt, { signal: abortSignal })).trim().toLowerCase();
             } finally {
               rl.close();
             }
             if (choice === "y" || choice === "yes") {
               const now = nowIso();
-              for (const depId of diag.failedDeps) {
-                const failedNode = byId.get(depId);
-                if (!failedNode) continue;
-                failedNode.status = "open";
-                failedNode.lock = null;
-                failedNode.attempts = 0;
-                failedNode.checkpoint = null;
-                failedNode.manualResetCount = Number(failedNode.manualResetCount || 0) + 1;
-                failedNode.lastManualResetAt = now;
-                failedNode.updatedAt = now;
+              for (const depId of failedDeps) {
+                await sqliteExec(
+                  paths.dbPath,
+                  `UPDATE nodes\n` +
+                    `SET status='open',\n` +
+                    `    attempts=0,\n` +
+                    `    checkpoint_json=NULL,\n` +
+                    `    lock_run_id=NULL,\n` +
+                    `    lock_started_at=NULL,\n` +
+                    `    lock_pid=NULL,\n` +
+                    `    lock_host=NULL,\n` +
+                    `    manual_reset_count=manual_reset_count+1,\n` +
+                    `    last_manual_reset_at='${now.replace(/'/g, "''")}',\n` +
+                    `    updated_at='${now.replace(/'/g, "''")}'\n` +
+                    `WHERE id='${String(depId).replace(/'/g, "''")}';\n`,
+                );
               }
-              await saveWorkgraph(paths.graphPath, currentGraph);
-              await syncTaskPlan({ paths, graph: currentGraph });
-              await appendLine(activityPath, `[${now}] manual-reset failed nodes: ${diag.failedDeps.join(", ")}`);
+              const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+              await syncTaskPlan({ paths, graph });
+              await appendLine(activityPath, `[${now}] manual-reset failed nodes: ${failedDeps.join(", ")}`);
               ui.event("warn", `Reopened failed deps. Continuing...`);
               continue;
             }
             return;
           }
 
-          // Non-interactive: exit rather than sleeping forever.
-          process.exitCode = 1;
-          return;
-        }
-
-        if (idleReason === "blocked_missing") {
           process.exitCode = 1;
           return;
         }
@@ -1488,12 +1504,14 @@ async function runCommand(rootDir, flags) {
       }
 
       lastIdleReason = "";
-      const counts = countByStatus(currentGraph.nodes);
+      const counts = await countByStatusDb({ dbPath: paths.dbPath });
       const countsSig = stableCountsSig(counts);
       if (countsSig !== lastCountsSig) {
         lastCountsSig = countsSig;
         ui.event("info", `queue: ${ui.formatCounts(counts)}`);
       }
+      const node = await getNode({ dbPath: paths.dbPath, nodeId: nodeRow.id });
+      if (!node) continue;
       ui.event("select", ui.formatNode(node));
       await appendLine(activityPath, `[${nowIso()}] select ${node.id}`);
 
@@ -1508,7 +1526,6 @@ async function runCommand(rootDir, flags) {
         rootDir,
         paths,
         config,
-        graph: currentGraph,
         node,
         run,
         activityPath,
@@ -1526,6 +1543,227 @@ async function runCommand(rootDir, flags) {
     await releaseSupervisorLock(paths.lockPath);
     await repairChoreoStateOwnership({ paths, ui });
   }
+}
+
+async function clearStaleLocksDb({ paths, staleLockSeconds }) {
+  const host = os.hostname();
+  const shouldCheckAge = Number.isFinite(staleLockSeconds) && staleLockSeconds > 0;
+  const nowMs = Date.now();
+  const rows = await sqliteQueryJson(
+    paths.dbPath,
+    "SELECT id, status, lock_started_at, lock_pid, lock_host FROM nodes WHERE lock_run_id IS NOT NULL;",
+  );
+  let changed = false;
+  for (const row of rows) {
+    const nodeId = String(row?.id || "").trim();
+    if (!nodeId) continue;
+    let stale = false;
+    const pid = Number(row?.lock_pid);
+    const lockHost = typeof row?.lock_host === "string" ? row.lock_host : "";
+    if (Number.isFinite(pid) && pid > 0 && lockHost === host) {
+      try {
+        process.kill(pid, 0);
+      } catch (error) {
+        if (error?.code !== "EPERM") stale = true;
+      }
+    }
+    if (!stale && shouldCheckAge) {
+      const started = new Date(String(row?.lock_started_at || "")).getTime();
+      if (!Number.isNaN(started) && (nowMs - started) / 1000 > staleLockSeconds) stale = true;
+    }
+    if (!stale) continue;
+    const status = String(row?.status || "").toLowerCase();
+    const nextStatus = status === "in_progress" ? "open" : String(row?.status || "open");
+    await unlockNodeDb({ dbPath: paths.dbPath, nodeId, status: nextStatus, nowIso: nowIso() });
+    changed = true;
+  }
+  return changed;
+}
+
+async function ensurePlannerScaffoldingDb({ paths, config }) {
+  const graph = await loadWorkgraphFromDb({ dbPath: paths.dbPath });
+  const beforeIntegrate = listIntegrateNodes(graph)[0] || null;
+  const beforeIntegrateId = beforeIntegrate?.id ? String(beforeIntegrate.id) : "";
+  const beforeIntegrateSig = beforeIntegrateId
+    ? (Array.isArray(beforeIntegrate?.dependsOn) ? beforeIntegrate.dependsOn : []).slice().sort().join("|")
+    : "";
+
+  const scaffold = ensurePlannerScaffolding({ graph, config });
+  if (!scaffold.updated) return scaffold;
+
+  const nodesById = new Map((graph.nodes || []).map((n) => [n.id, n]));
+  for (const nodeId of scaffold.addedIds) {
+    const node = nodesById.get(nodeId);
+    if (!node) continue;
+    const createdAt = typeof node.createdAt === "string" && node.createdAt ? node.createdAt : nowIso();
+    const updatedAt = typeof node.updatedAt === "string" && node.updatedAt ? node.updatedAt : createdAt;
+    const runner = typeof node.runner === "string" && node.runner.trim() ? node.runner.trim() : null;
+    await sqliteExec(
+      paths.dbPath,
+      `INSERT OR IGNORE INTO nodes(\n` +
+        `  id, title, type, status, parent_id,\n` +
+        `  runner, inputs_json, ownership_json, acceptance_json, verify_json,\n` +
+        `  retry_policy_json, attempts,\n` +
+        `  created_at, updated_at\n` +
+        `)\n` +
+        `VALUES(\n` +
+        `  ${sqlQuote(node.id)}, ${sqlQuote(node.title || "")}, ${sqlQuote(node.type || "task")}, ${sqlQuote(node.status || "open")}, NULL,\n` +
+        `  ${runner ? sqlQuote(runner) : "NULL"}, ${sqlQuote(JSON.stringify(node.inputs || []))}, ${sqlQuote(JSON.stringify(node.ownership || []))}, ${sqlQuote(
+          JSON.stringify(node.acceptance || []),
+        )}, ${sqlQuote(JSON.stringify(node.verify || []))},\n` +
+        `  ${sqlQuote(JSON.stringify(node.retryPolicy || { maxAttempts: 3 }))}, ${String(Number(node.attempts || 0) || 0)},\n` +
+        `  ${sqlQuote(createdAt)}, ${sqlQuote(updatedAt)}\n` +
+        `);\n`,
+    );
+
+    const deps = Array.isArray(node.dependsOn) ? node.dependsOn : [];
+    for (const depId of deps) {
+      const dep = String(depId || "").trim();
+      if (!dep) continue;
+      await sqliteExec(paths.dbPath, `INSERT OR IGNORE INTO deps(node_id, depends_on_id) VALUES(${sqlQuote(node.id)}, ${sqlQuote(dep)});\n`);
+    }
+  }
+
+  const integrate = listIntegrateNodes(graph)[0] || null;
+  if (integrate?.id && integrate.id === beforeIntegrateId && normalizeStatus(integrate?.status) === "open") {
+    const nextSig = (Array.isArray(integrate?.dependsOn) ? integrate.dependsOn : []).slice().sort().join("|");
+    if (nextSig !== beforeIntegrateSig) {
+      await sqliteExec(paths.dbPath, `DELETE FROM deps WHERE node_id=${sqlQuote(integrate.id)};\n`);
+      for (const depId of Array.isArray(integrate.dependsOn) ? integrate.dependsOn : []) {
+        const dep = String(depId || "").trim();
+        if (!dep) continue;
+        await sqliteExec(paths.dbPath, `INSERT OR IGNORE INTO deps(node_id, depends_on_id) VALUES(${sqlQuote(integrate.id)}, ${sqlQuote(dep)});\n`);
+      }
+      await sqliteExec(
+        paths.dbPath,
+        `UPDATE nodes SET updated_at=${sqlQuote(nowIso())} WHERE id=${sqlQuote(integrate.id)};\n`,
+      );
+    }
+  }
+
+  return scaffold;
+}
+
+async function answerNeedsHumanInteractiveDb({ paths, ui, abortSignal }) {
+  const canPrompt = isPromptEnabled();
+  if (!canPrompt) return false;
+  if (abortSignal?.aborted) return false;
+
+  const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+  const needsHuman = (graph.nodes || []).filter((n) => String(n?.status || "").toLowerCase() === "needs_human");
+  if (needsHuman.length === 0) return false;
+
+  let node = null;
+  if (needsHuman.length === 1) {
+    node = needsHuman[0];
+  } else {
+    while (true) {
+      ui.writeLine(ui.hr("needs human"));
+      for (let i = 0; i < needsHuman.length; i += 1) {
+        const n = needsHuman[i];
+        const q = n?.checkpoint?.question ? ui.truncate(n.checkpoint.question, 80) : "";
+        ui.writeLine(`${String(i + 1).padStart(2, " ")}. ${n.id}${q ? ` — ${q}` : ""}`);
+      }
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        const picked = (await rl.question("Pick a node number to answer (or 'q' to quit): ", { signal: abortSignal }))
+          .trim()
+          .toLowerCase();
+        if (!picked || picked === "q" || picked === "quit") return false;
+        const idx = Number(picked);
+        if (!Number.isFinite(idx) || idx < 1 || idx > needsHuman.length) {
+          ui.event("warn", "Invalid selection.");
+          continue;
+        }
+        node = needsHuman[idx - 1];
+        break;
+      } finally {
+        rl.close();
+      }
+    }
+  }
+  if (!node?.id) return false;
+
+  const { checkpointPathAbs, checkpoint } = await resolveCheckpointForAnswer({ paths, graph, nodeId: node.id, checkpointFile: "" });
+  const question = String(checkpoint?.question || "").trim();
+  const context = String(checkpoint?.context || "").trim();
+  const options = Array.isArray(checkpoint?.options) ? checkpoint.options.map((o) => String(o)) : [];
+
+  ui.writeLine(ui.hr(`checkpoint ${node.id}`));
+  if (question) ui.writeLine(question);
+  if (context) ui.writeLine(`\n${context}`);
+  if (options.length > 0) {
+    ui.writeLine("\nOptions:");
+    for (const opt of options) ui.writeLine(`- ${opt}`);
+  }
+  ui.detail(`checkpoint: ${path.relative(paths.rootDir, checkpointPathAbs)}`);
+  ui.writeLine(ui.hr());
+
+  let answer = "";
+  while (true) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      answer = (await rl.question("Your answer (or 'q' to quit): ", { signal: abortSignal })).trim();
+    } finally {
+      rl.close();
+    }
+    if (!answer) {
+      ui.event("warn", "Answer was empty.");
+      continue;
+    }
+    if (answer.toLowerCase() === "q" || answer.toLowerCase() === "quit") return false;
+    break;
+  }
+
+  const checkpointId = String(checkpoint?.id || "").trim() || deriveCheckpointIdFromPath(checkpointPathAbs);
+  const responsePathAbs = path.join(paths.checkpointsDir, `response-${checkpointId}.json`);
+  await writeJsonAtomic(responsePathAbs, {
+    version: 1,
+    checkpointId,
+    nodeId: node.id,
+    answeredAt: nowIso(),
+    answer,
+  });
+
+  const checkpointMeta = {
+    ...(typeof node.checkpoint === "object" && node.checkpoint ? node.checkpoint : {}),
+    version: 1,
+    runId: node?.checkpoint?.runId || null,
+    path: path.relative(paths.rootDir, checkpointPathAbs),
+    question: question || node?.checkpoint?.question || "",
+    answeredAt: nowIso(),
+    answer,
+    responsePath: path.relative(paths.rootDir, responsePathAbs),
+  };
+
+  await sqliteExec(
+    paths.dbPath,
+    `UPDATE nodes\n` +
+      `SET status='open',\n` +
+      `    checkpoint_json=${sqlQuote(JSON.stringify(checkpointMeta))},\n` +
+      `    lock_run_id=NULL,\n` +
+      `    lock_started_at=NULL,\n` +
+      `    lock_pid=NULL,\n` +
+      `    lock_host=NULL,\n` +
+      `    updated_at=${sqlQuote(nowIso())}\n` +
+      `WHERE id=${sqlQuote(node.id)};\n`,
+  );
+
+  const refreshed = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+  await syncTaskPlan({ paths, graph: refreshed });
+
+  const progressPath = path.join(paths.memoryDir, "progress.md");
+  const lines = [];
+  lines.push("");
+  lines.push(`## [${nowIso()}] Answered checkpoint for ${node.id}`);
+  if (question) lines.push(`- question: ${question}`);
+  lines.push(`- answer: ${answer}`);
+  lines.push(`- checkpoint: ${path.relative(paths.rootDir, checkpointPathAbs)}`);
+  lines.push(`- response: ${path.relative(paths.rootDir, responsePathAbs)}`);
+  await writeFile(progressPath, lines.join("\n") + "\n", { encoding: "utf8", flag: "a" });
+
+  ui.event("done", `Reopened ${node.id}. Continuing...`);
+  return true;
 }
 
 function clearStaleLocks(graph, staleSeconds) {
@@ -1560,17 +1798,24 @@ function clearStaleLocks(graph, staleSeconds) {
   return changed;
 }
 
-async function executeNode({ rootDir, paths, config, graph, node, run, activityPath, errorsPath, live = false, ui, abortSignal = null }) {
+async function executeNode({ rootDir, paths, config, node, run, activityPath, errorsPath, live = false, ui, abortSignal = null }) {
   const consoleUi = ui || createUi({ noColor: false });
   const spawnIdentity = await resolveSpawnIdentity({ rootDir: paths.rootDir });
   const identityEnv = envForIdentity(spawnIdentity);
-  // Lock + mark in progress
+
   const now = nowIso();
-  node.status = "in_progress";
-  node.lock = { runId: run, startedAt: now, pid: process.pid, host: os.hostname() };
-  node.attempts = Number(node.attempts || 0);
-  node.updatedAt = now;
-  await saveWorkgraph(paths.graphPath, graph);
+  const claimed = await claimNode({
+    dbPath: paths.dbPath,
+    nodeId: node.id,
+    runId: run,
+    pid: process.pid,
+    host: os.hostname(),
+    nowIso: now,
+  });
+  if (!claimed) return;
+
+  const graphAfterClaim = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+  await syncTaskPlan({ paths, graph: graphAfterClaim });
 
   const runDir = path.join(paths.runsDir, run);
   await ensureDir(runDir);
@@ -1595,9 +1840,9 @@ async function executeNode({ rootDir, paths, config, graph, node, run, activityP
   const runner = config.runners?.[runnerName];
   if (!runner?.cmd) {
     await appendLine(errorsPath, `[${nowIso()}] missing runner for role=${role} runner=${runnerName}`);
-    node.status = "open";
-    node.lock = null;
-    await saveWorkgraph(paths.graphPath, graph);
+    await unlockNodeDb({ dbPath: paths.dbPath, nodeId: node.id, status: "open", nowIso: nowIso() });
+    const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+    await syncTaskPlan({ paths, graph });
     return;
   }
 
@@ -1646,10 +1891,9 @@ async function executeNode({ rootDir, paths, config, graph, node, run, activityP
 
   if (abortSignal?.aborted) {
     await appendLine(activityPath, `[${nowIso()}] cancelled node=${node.id} run=${run}`);
-    node.status = "open";
-    node.lock = null;
-    node.updatedAt = nowIso();
-    await saveWorkgraph(paths.graphPath, graph);
+    await unlockNodeDb({ dbPath: paths.dbPath, nodeId: node.id, status: "open", nowIso: nowIso() });
+    const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+    await syncTaskPlan({ paths, graph });
     return;
   }
 
@@ -1688,10 +1932,9 @@ async function executeNode({ rootDir, paths, config, graph, node, run, activityP
 
   if (execRes.aborted || abortSignal?.aborted) {
     await appendLine(activityPath, `[${nowIso()}] cancelled node=${node.id} run=${run}`);
-    node.status = "open";
-    node.lock = null;
-    node.updatedAt = nowIso();
-    await saveWorkgraph(paths.graphPath, graph);
+    await unlockNodeDb({ dbPath: paths.dbPath, nodeId: node.id, status: "open", nowIso: nowIso() });
+    const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+    await syncTaskPlan({ paths, graph });
     return;
   }
 
@@ -1706,12 +1949,7 @@ async function executeNode({ rootDir, paths, config, graph, node, run, activityP
   }
   if (!result) {
     await appendLine(errorsPath, `[${nowIso()}] missing/invalid result.json node=${node.id} run=${run} cmd=${execRes.cmd}`);
-    node.attempts += 1;
-    node.status = node.attempts >= (node.retryPolicy?.maxAttempts || 3) ? "failed" : "open";
-    node.lock = null;
-    node.updatedAt = nowIso();
-    await saveWorkgraph(paths.graphPath, graph);
-    return;
+    result = { status: "fail", summary: "Missing/invalid result.json", next: { addNodes: [], setStatus: [] }, checkpoint: null, errors: [] };
   }
 
   if (String(result?.status || "").toLowerCase() === "checkpoint") {
@@ -1722,7 +1960,7 @@ async function executeNode({ rootDir, paths, config, graph, node, run, activityP
     }
     const checkpoint = await safeReadJson(checkpointOutPath);
     const question = String(checkpoint?.question || "").trim();
-    node.checkpoint = {
+    const checkpointMeta = {
       version: 1,
       runId: run,
       path: path.relative(paths.rootDir, checkpointOutPath),
@@ -1731,28 +1969,21 @@ async function executeNode({ rootDir, paths, config, graph, node, run, activityP
       answeredAt: null,
       answer: null,
     };
+    result = { ...result, checkpoint: checkpointMeta };
     consoleUi.event("checkpoint", `${node.id}${question ? ` — ${consoleUi.truncate(question, 160)}` : ""}`);
     consoleUi.detail(`checkpoint: ${checkpointOutPath}`);
   }
 
-  await applyResult({ graph, node, result, activityPath, errorsPath });
-  const resultStatus = String(result?.status || "").toLowerCase();
-  const nodeType = normalizeNodeType(node?.type);
-  if ((nodeType === "plan" || nodeType === "epic") && resultStatus === "success") {
-    const scaffold = ensurePlannerScaffolding({ graph, config });
-    if (scaffold.updated) {
-      if (scaffold.addedIds.length > 0) await appendLine(activityPath, `[${nowIso()}] plan-scaffold added: ${scaffold.addedIds.join(", ")}`);
-      consoleUi.event(
-        "info",
-        `Planner scaffolding ${scaffold.addedIds.length > 0 ? `added ${scaffold.addedIds.length} node${scaffold.addedIds.length === 1 ? "" : "s"}` : "updated deps"}.`,
-      );
-    }
-  }
-  await saveWorkgraph(paths.graphPath, graph);
-  await appendProgress({ paths, node, run, role, runnerName, result, stdoutPath });
-  await syncTaskPlan({ paths, graph });
-
   const finalStatus = String(result?.status || "").toLowerCase();
+  if (finalStatus === "success") await appendLine(activityPath, `[${nowIso()}] done node=${node.id}`);
+  else if (finalStatus === "checkpoint") await appendLine(activityPath, `[${nowIso()}] checkpoint node=${node.id}`);
+  else await appendLine(errorsPath, `[${nowIso()}] fail node=${node.id}`);
+
+  await applyResultDb({ dbPath: paths.dbPath, nodeId: node.id, runId: run, result, nowIso: nowIso() });
+  const graphAfter = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+  await syncTaskPlan({ paths, graph: graphAfter });
+  await appendProgress({ paths, node, run, role, runnerName, result, stdoutPath });
+
   const summary = consoleUi.truncate(result?.summary || "", 180);
   if (finalStatus === "success") {
     consoleUi.event("done", `${node.id}${duration ? ` (${duration})` : ""}${summary ? ` — ${summary}` : ""}`);

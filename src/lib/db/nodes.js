@@ -5,6 +5,18 @@ function sqlQuote(value) {
   return `'${s.replace(/'/g, "''")}'`;
 }
 
+function safeJsonParse(value, fallback) {
+  if (value == null) return fallback;
+  const text = String(value);
+  if (!text.trim()) return fallback;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function normalizeStatus(value) {
   return String(value || "").toLowerCase().trim();
 }
@@ -57,6 +69,155 @@ export async function selectNextRunnableNode({ dbPath, nowIso }) {
       `LIMIT 1;\n`,
   );
   return rows[0] || null;
+}
+
+export async function getNode({ dbPath, nodeId }) {
+  const rows = await sqliteQueryJson(dbPath, `SELECT * FROM nodes WHERE id=${sqlQuote(nodeId)} LIMIT 1;\n`);
+  const row = rows[0] || null;
+  if (!row) return null;
+
+  const depRows = await sqliteQueryJson(
+    dbPath,
+    `SELECT depends_on_id FROM deps WHERE node_id=${sqlQuote(nodeId)} ORDER BY depends_on_id;\n`,
+  );
+  const dependsOn = depRows.map((r) => r.depends_on_id).filter(Boolean);
+
+  const lockRunId = row.lock_run_id ?? null;
+  const lock = lockRunId
+    ? {
+        runId: lockRunId,
+        startedAt: row.lock_started_at ?? null,
+        pid: row.lock_pid ?? null,
+        host: row.lock_host ?? null,
+      }
+    : null;
+
+  return {
+    id: row.id,
+    title: row.title ?? "",
+    type: row.type ?? "",
+    status: row.status ?? "open",
+    dependsOn,
+    runner: row.runner ?? null,
+    inputs: safeJsonParse(row.inputs_json, []),
+    ownership: safeJsonParse(row.ownership_json, []),
+    acceptance: safeJsonParse(row.acceptance_json, []),
+    verify: safeJsonParse(row.verify_json, []),
+    retryPolicy: safeJsonParse(row.retry_policy_json, { maxAttempts: 3 }),
+    attempts: row.attempts ?? 0,
+    blockedUntil: row.blocked_until ?? null,
+    lock,
+    checkpoint: safeJsonParse(row.checkpoint_json, null),
+    parentId: row.parent_id ?? null,
+    createdAt: row.created_at ?? null,
+    updatedAt: row.updated_at ?? null,
+    completedAt: row.completed_at ?? null,
+    autoResetCount: row.auto_reset_count ?? 0,
+    lastAutoResetAt: row.last_auto_reset_at ?? null,
+    manualResetCount: row.manual_reset_count ?? 0,
+    lastManualResetAt: row.last_manual_reset_at ?? null,
+  };
+}
+
+export async function listNodes({ dbPath }) {
+  const nodeRows = await sqliteQueryJson(dbPath, "SELECT * FROM nodes ORDER BY id;");
+  const depRows = await sqliteQueryJson(dbPath, "SELECT node_id, depends_on_id FROM deps ORDER BY node_id, depends_on_id;");
+  const dependsOnByNodeId = new Map();
+  for (const row of depRows) {
+    const nodeId = typeof row?.node_id === "string" ? row.node_id : "";
+    const depId = typeof row?.depends_on_id === "string" ? row.depends_on_id : "";
+    if (!nodeId || !depId) continue;
+    const arr = dependsOnByNodeId.get(nodeId) || [];
+    arr.push(depId);
+    dependsOnByNodeId.set(nodeId, arr);
+  }
+
+  return nodeRows.map((row) => {
+    const id = row.id;
+    const lockRunId = row.lock_run_id ?? null;
+    const lock = lockRunId
+      ? {
+          runId: lockRunId,
+          startedAt: row.lock_started_at ?? null,
+          pid: row.lock_pid ?? null,
+          host: row.lock_host ?? null,
+        }
+      : null;
+    return {
+      id,
+      title: row.title ?? "",
+      type: row.type ?? "",
+      status: row.status ?? "open",
+      dependsOn: dependsOnByNodeId.get(id) || [],
+      runner: row.runner ?? null,
+      inputs: safeJsonParse(row.inputs_json, []),
+      ownership: safeJsonParse(row.ownership_json, []),
+      acceptance: safeJsonParse(row.acceptance_json, []),
+      verify: safeJsonParse(row.verify_json, []),
+      retryPolicy: safeJsonParse(row.retry_policy_json, { maxAttempts: 3 }),
+      attempts: row.attempts ?? 0,
+      blockedUntil: row.blocked_until ?? null,
+      lock,
+      checkpoint: safeJsonParse(row.checkpoint_json, null),
+      parentId: row.parent_id ?? null,
+      createdAt: row.created_at ?? null,
+      updatedAt: row.updated_at ?? null,
+      completedAt: row.completed_at ?? null,
+      autoResetCount: row.auto_reset_count ?? 0,
+      lastAutoResetAt: row.last_auto_reset_at ?? null,
+      manualResetCount: row.manual_reset_count ?? 0,
+      lastManualResetAt: row.last_manual_reset_at ?? null,
+    };
+  });
+}
+
+export async function countByStatusDb({ dbPath }) {
+  const rows = await sqliteQueryJson(dbPath, "SELECT status, COUNT(*) AS n FROM nodes GROUP BY status;");
+  const out = {};
+  for (const row of rows) {
+    const key = typeof row?.status === "string" ? row.status : "";
+    if (!key) continue;
+    out[key] = Number(row.n || 0);
+  }
+  return out;
+}
+
+export async function allDoneDb({ dbPath }) {
+  const rows = await sqliteQueryJson(dbPath, "SELECT COUNT(*) AS n FROM nodes;");
+  const total = Number(rows?.[0]?.n ?? 0);
+  if (!Number.isFinite(total) || total <= 0) return false;
+  const notDoneRows = await sqliteQueryJson(dbPath, "SELECT COUNT(*) AS n FROM nodes WHERE status <> 'done';");
+  const notDone = Number(notDoneRows?.[0]?.n ?? 0);
+  return Number.isFinite(notDone) && notDone === 0;
+}
+
+export async function listFailedDepsBlockingOpenNodes({ dbPath }) {
+  const rows = await sqliteQueryJson(
+    dbPath,
+    `SELECT DISTINCT dep.id AS id\n` +
+      `FROM nodes n\n` +
+      `JOIN deps d ON d.node_id = n.id\n` +
+      `JOIN nodes dep ON dep.id = d.depends_on_id\n` +
+      `WHERE n.status='open' AND dep.status='failed'\n` +
+      `ORDER BY dep.id;\n`,
+  );
+  return rows.map((r) => r.id).filter(Boolean);
+}
+
+export async function unlockNode({ dbPath, nodeId, status = "open", nowIso }) {
+  const now = typeof nowIso === "string" && nowIso.trim() ? nowIso : new Date().toISOString();
+  const nextStatus = String(status || "open").trim() || "open";
+  await sqliteExec(
+    dbPath,
+    `UPDATE nodes\n` +
+      `SET status=${sqlQuote(nextStatus)},\n` +
+      `    lock_run_id=NULL,\n` +
+      `    lock_started_at=NULL,\n` +
+      `    lock_pid=NULL,\n` +
+      `    lock_host=NULL,\n` +
+      `    updated_at=${sqlQuote(now)}\n` +
+      `WHERE id=${sqlQuote(nodeId)};\n`,
+  );
 }
 
 export async function claimNode({ dbPath, nodeId, runId, pid, host, nowIso }) {

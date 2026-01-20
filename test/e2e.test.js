@@ -6,6 +6,8 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
+import { sqliteJson } from "./helpers/sqlite.js";
+
 function runCli({ binPath, cwd, args }) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [binPath, ...args], {
@@ -85,6 +87,14 @@ test("end-to-end: planner -> executor -> verifier -> done", async () => {
   const helloPath = path.join(tmpDir, "hello.txt");
   const hello = await readFile(helloPath, "utf8");
   assert.equal(hello, "hello from choreo\n");
+
+  const dbPath = path.join(tmpDir, ".choreo", "state.sqlite");
+  await stat(dbPath);
+  const dbNodes = await sqliteJson(dbPath, "SELECT id, status FROM nodes ORDER BY id;");
+  const dbStatuses = new Map(dbNodes.map((n) => [n.id, n.status]));
+  assert.equal(dbStatuses.get("plan-000"), "done");
+  assert.equal(dbStatuses.get("task-hello"), "done");
+  assert.equal(dbStatuses.get("verify-hello"), "done");
 
   const graphPath = path.join(tmpDir, ".choreo", "workgraph.json");
   const graph = JSON.parse(await readFile(graphPath, "utf8"));

@@ -13,7 +13,7 @@ function safeJsonParse(value, fallback) {
   }
 }
 
-export async function exportWorkgraphJson({ dbPath, snapshotPath }) {
+export async function loadWorkgraphFromDb({ dbPath }) {
   const nodeRows = await sqliteQueryJson(dbPath, "SELECT * FROM nodes ORDER BY id;");
   const depRows = await sqliteQueryJson(dbPath, "SELECT node_id, depends_on_id FROM deps ORDER BY node_id, depends_on_id;");
 
@@ -63,6 +63,11 @@ export async function exportWorkgraphJson({ dbPath, snapshotPath }) {
     };
   });
 
-  await writeJsonAtomic(snapshotPath, { version: 1, nodes });
+  return { version: 1, nodes };
 }
 
+export async function exportWorkgraphJson({ dbPath, snapshotPath }) {
+  const graph = await loadWorkgraphFromDb({ dbPath });
+  await writeJsonAtomic(snapshotPath, graph);
+  return graph;
+}

@@ -6,6 +6,8 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
+import { sqliteExec, sqliteJson } from "./helpers/sqlite.js";
+
 function runCli({ binPath, cwd, args }) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [binPath, ...args], {
@@ -40,16 +42,20 @@ test("run: auto-resets failed deps when graph is blocked", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const graphPath = path.join(tmpDir, ".choreo", "workgraph.json");
-  const graph = JSON.parse(await readFile(graphPath, "utf8"));
-
-  graph.nodes = [
-    { id: "plan-000", title: "plan", type: "plan", status: "done", dependsOn: [] },
-    { id: "task-001", title: "failed dep", type: "task", status: "failed", dependsOn: [], attempts: 3, retryPolicy: { maxAttempts: 3 } },
-    { id: "task-002", title: "blocked task", type: "task", status: "open", dependsOn: ["task-001"] },
-  ];
-
-  await writeFile(graphPath, JSON.stringify(graph, null, 2) + "\n", "utf8");
+  const dbPath = path.join(tmpDir, ".choreo", "state.sqlite");
+  const now = new Date().toISOString().replace(/'/g, "''");
+  await sqliteExec(
+    dbPath,
+    `DELETE FROM deps;\n` +
+      `DELETE FROM nodes;\n` +
+      `INSERT INTO nodes(id, title, type, status, attempts, retry_policy_json, created_at, updated_at)\n` +
+      `VALUES('plan-000','plan','plan','done',0,'{\"maxAttempts\":3}','${now}','${now}');\n` +
+      `INSERT INTO nodes(id, title, type, status, attempts, retry_policy_json, created_at, updated_at)\n` +
+      `VALUES('task-001','failed dep','task','failed',3,'{\"maxAttempts\":3}','${now}','${now}');\n` +
+      `INSERT INTO nodes(id, title, type, status, attempts, retry_policy_json, created_at, updated_at)\n` +
+      `VALUES('task-002','blocked task','task','open',0,'{\"maxAttempts\":3}','${now}','${now}');\n` +
+      `INSERT INTO deps(node_id, depends_on_id) VALUES('task-002','task-001');\n`,
+  );
 
   const runRes = await runCli({
     binPath,
@@ -59,11 +65,8 @@ test("run: auto-resets failed deps when graph is blocked", async () => {
   assert.equal(runRes.code, 0, runRes.stderr || runRes.stdout);
   assert.match(runRes.stdout + runRes.stderr, /Reopened failed node/i);
 
-  const updated = JSON.parse(await readFile(graphPath, "utf8"));
-  const task001 = updated.nodes.find((n) => n.id === "task-001");
-  assert.ok(task001, "task-001 missing");
-  assert.equal(task001.status, "open");
-  assert.equal(task001.attempts, 0);
-  assert.equal(task001.autoResetCount, 1);
+  const task001 = await sqliteJson(dbPath, "SELECT status, attempts, auto_reset_count FROM nodes WHERE id='task-001';");
+  assert.equal(task001[0]?.status, "open");
+  assert.equal(Number(task001[0]?.attempts ?? -1), 0);
+  assert.equal(Number(task001[0]?.auto_reset_count ?? -1), 1);
 });
-
