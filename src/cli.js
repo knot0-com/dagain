@@ -3,6 +3,7 @@ import os from "node:os";
 import { access, chmod, chown, lstat, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { constants as fsConstants } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import { parseArgs } from "./lib/args.js";
 import { sha256File } from "./lib/crypto.js";
@@ -113,6 +114,20 @@ function mergeEnv(a, b) {
   if (a && typeof a === "object") Object.assign(out, a);
   if (b && typeof b === "object") Object.assign(out, b);
   return Object.keys(out).length > 0 ? out : null;
+}
+
+function choreoRunnerEnv(paths, { nodeId, runId, parentNodeId = "" }) {
+  const choreoBin = fileURLToPath(new URL("../bin/choreo.js", import.meta.url));
+  return {
+    CHOREO_DB: paths.dbPath,
+    CHOREO_NODE_ID: nodeId,
+    CHOREO_RUN_ID: runId,
+    CHOREO_PARENT_NODE_ID: parentNodeId,
+    CHOREO_ARTIFACTS_DIR: paths.artifactsDir,
+    CHOREO_CHECKPOINTS_DIR: paths.checkpointsDir,
+    CHOREO_RUNS_DIR: paths.runsDir,
+    CHOREO_BIN: choreoBin,
+  };
 }
 
 function envForIdentity(identity) {
@@ -772,7 +787,10 @@ async function refineGoalInteractive({
       ui.detail(`log: ${stdoutPath}`);
       if (live) ui.writeLine(ui.hr(`runner ${runnerName}`));
       const spinner = !live ? ui.spinnerStart(`goal-refine ${turn}/${maxTurns} (${runnerName})`) : null;
-      const runnerEnv = mergeEnv(resolveRunnerEnv({ runnerName, runner, cwd: paths.rootDir, paths }), identityEnv);
+      const runnerEnv = mergeEnv(
+        mergeEnv(resolveRunnerEnv({ runnerName, runner, cwd: paths.rootDir, paths }), identityEnv),
+        choreoRunnerEnv(paths, { nodeId: "goal-refine", runId: run }),
+      );
       await ensureRunnerTmpDir(runnerEnv);
       if (runnerName === "claude")
         await ensureClaudeProjectTmpWritable({ cwd: paths.rootDir, ui, uid: spawnIdentity?.uid, gid: spawnIdentity?.gid });
@@ -1638,7 +1656,10 @@ async function executeNode({ rootDir, paths, config, graph, node, run, activityP
   const startedAtMs = Date.now();
   if (live) consoleUi.writeLine(consoleUi.hr(`runner ${runnerName}`));
   const spinner = !live ? consoleUi.spinnerStart(`${role} ${node.id}`) : null;
-  const runnerEnv = mergeEnv(resolveRunnerEnv({ runnerName, runner, cwd: paths.rootDir, paths }), identityEnv);
+  const runnerEnv = mergeEnv(
+    mergeEnv(resolveRunnerEnv({ runnerName, runner, cwd: paths.rootDir, paths }), identityEnv),
+    choreoRunnerEnv(paths, { nodeId: node.id, runId: run }),
+  );
   await ensureRunnerTmpDir(runnerEnv);
   if (runnerName === "claude")
     await ensureClaudeProjectTmpWritable({ cwd: paths.rootDir, ui: consoleUi, uid: spawnIdentity?.uid, gid: spawnIdentity?.gid });

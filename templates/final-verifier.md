@@ -7,6 +7,21 @@ You are the final verifier for the overall goal. Verify the project satisfies th
 - Goal file: {{GOAL_PATH}}
 - Run ID: {{RUN_ID}}
 
+## DB-First Context (REQUIRED)
+
+Choreo provides a SQLite DB for durable node/run context. Use it to store and load only the context you need.
+
+- DB: `$CHOREO_DB`
+- Node: `$CHOREO_NODE_ID`
+- Parent node (may be empty): `$CHOREO_PARENT_NODE_ID`
+- Run: `$CHOREO_RUN_ID`
+- Artifacts dir: `$CHOREO_ARTIFACTS_DIR`
+
+Rules:
+- Do not write to workgraph tables (`nodes`/`deps`). Only Choreo mutates the workgraph.
+- Use the DB for node context only (read any node key; write your own node keys).
+- Prefer `choreo kv ...` helpers when available; otherwise use `sqlite3 -json "$CHOREO_DB" ...`.
+
 ### GOAL.md (truncated)
 {{GOAL_DRAFT}}
 
