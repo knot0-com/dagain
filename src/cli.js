@@ -2428,8 +2428,8 @@ async function answerCommand(rootDir, flags) {
   const abortSignal = cancel.signal;
 
   try {
-    const graph = await loadWorkgraph(paths.graphPath);
-    if (!graph) throw new Error("Missing .choreo/workgraph.json. Run `choreo init`.");
+    if (!(await pathExists(paths.dbPath))) throw new Error("Missing .choreo/state.sqlite. Run `choreo init`.");
+    const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
 
     const targetNodeId = typeof flags.node === "string" ? flags.node.trim() : "";
     const checkpointFile = typeof flags.checkpoint === "string" ? flags.checkpoint.trim() : "";
@@ -2529,10 +2529,7 @@ async function answerCommand(rootDir, flags) {
       answer,
     });
 
-    node.status = "open";
-    node.lock = null;
-    node.updatedAt = nowIso();
-    node.checkpoint = {
+    const checkpointMeta = {
       ...(typeof node.checkpoint === "object" && node.checkpoint ? node.checkpoint : {}),
       version: 1,
       runId: node?.checkpoint?.runId || null,
@@ -2542,8 +2539,22 @@ async function answerCommand(rootDir, flags) {
       answer,
       responsePath: path.relative(paths.rootDir, responsePathAbs),
     };
-    await saveWorkgraph(paths.graphPath, graph);
-    await syncTaskPlan({ paths, graph });
+
+    await sqliteExec(
+      paths.dbPath,
+      `UPDATE nodes\n` +
+        `SET status='open',\n` +
+        `    checkpoint_json=${sqlQuote(JSON.stringify(checkpointMeta))},\n` +
+        `    lock_run_id=NULL,\n` +
+        `    lock_started_at=NULL,\n` +
+        `    lock_pid=NULL,\n` +
+        `    lock_host=NULL,\n` +
+        `    updated_at=${sqlQuote(nowIso())}\n` +
+        `WHERE id=${sqlQuote(node.id)};\n`,
+    );
+
+    const refreshed = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+    await syncTaskPlan({ paths, graph: refreshed });
 
     const progressPath = path.join(paths.memoryDir, "progress.md");
     const lines = [];
