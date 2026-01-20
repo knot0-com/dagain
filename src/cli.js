@@ -17,6 +17,7 @@ import { acquireSupervisorLock, heartbeatSupervisorLock, readSupervisorLock, rel
 import { createUi } from "./lib/ui.js";
 import { sqliteExec, sqliteQueryJson } from "./lib/db/sqlite3.js";
 import { exportWorkgraphJson, loadWorkgraphFromDb } from "./lib/db/export.js";
+import { kvGet, kvList, kvPut } from "./lib/db/kv.js";
 import {
   allDoneDb,
   applyResult as applyResultDb,
@@ -41,6 +42,9 @@ Usage:
   choreo run [--once] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
   choreo resume [--once] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
   choreo answer [--node=<id>] [--checkpoint=<file>] [--answer="..."] [--no-prompt]
+  choreo kv get [--run] [--node=<id>] --key=<k> [--json]
+  choreo kv put [--run] [--node=<id>] --key=<k> --value="..." [--allow-cross-node-write]
+  choreo kv ls [--run] [--node=<id>] [--prefix=<p>] [--json]
   choreo stop [--signal=<sig>]
   choreo graph validate
 
@@ -2363,6 +2367,11 @@ export async function main(argv) {
     return;
   }
 
+  if (command === "kv") {
+    await kvCommand(rootDir, positional, flags);
+    return;
+  }
+
   if (command === "stop") {
     await stopCommand(rootDir, flags);
     return;
@@ -2571,6 +2580,87 @@ async function answerCommand(rootDir, flags) {
   } finally {
     cancel.cleanup();
   }
+}
+
+async function kvCommand(rootDir, positional, flags) {
+  const paths = choreoPaths(rootDir);
+  const ui = createUi({ noColor: resolveNoColorFlag(flags), forceColor: resolveForceColorFlag(flags) });
+
+  const sub = String(positional?.[0] || "").trim().toLowerCase();
+  if (!sub || sub === "help") {
+    process.stdout.write(usage());
+    return;
+  }
+
+  const dbPath = String(process.env.CHOREO_DB || paths.dbPath || "").trim();
+  if (!dbPath || !(await pathExists(dbPath))) throw new Error("Missing state DB. Run `choreo init`.");
+
+  const runScoped = Boolean(flags.run);
+  const nodeFlag = typeof flags.node === "string" ? flags.node.trim() : "";
+  const envNodeId = String(process.env.CHOREO_NODE_ID || "").trim();
+  const nodeId = runScoped ? "__run__" : nodeFlag || envNodeId;
+
+  if ((sub === "get" || sub === "put" || sub === "ls") && !nodeId) {
+    throw new Error("Missing node id. Provide `--node <id>` or set $CHOREO_NODE_ID (or use `--run`).");
+  }
+
+  const key = typeof flags.key === "string" ? flags.key.trim() : "";
+  const json = Boolean(flags.json);
+  const prefix = typeof flags.prefix === "string" ? flags.prefix : "";
+
+  if (sub === "get") {
+    if (!key) throw new Error("Missing key. Provide `--key <k>`.");
+    const row = await kvGet({ dbPath, nodeId, key });
+    if (!row) {
+      ui.event("warn", `Key not found: ${nodeId}:${key}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (json) {
+      process.stdout.write(JSON.stringify(row, null, 2) + "\n");
+      return;
+    }
+    if (typeof row.value_text === "string") process.stdout.write(row.value_text + "\n");
+    else if (typeof row.artifact_path === "string") process.stdout.write(row.artifact_path + "\n");
+    return;
+  }
+
+  if (sub === "ls") {
+    const rows = await kvList({ dbPath, nodeId, prefix });
+    if (json) {
+      process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
+      return;
+    }
+    for (const row of rows) process.stdout.write(String(row.key || "") + "\n");
+    return;
+  }
+
+  if (sub === "put") {
+    if (!key) throw new Error("Missing key. Provide `--key <k>`.");
+    const valueText = typeof flags.value === "string" ? String(flags.value) : "";
+    if (!valueText) throw new Error("Missing value. Provide `--value \"...\"`.");
+
+    const allowCrossNodeWrite = Boolean(flags["allow-cross-node-write"]);
+    const allowedWriteTarget = nodeId === "__run__" || (envNodeId && nodeId === envNodeId);
+    if (!allowedWriteTarget && !allowCrossNodeWrite) {
+      throw new Error(
+        `Refusing to write ${nodeId}:${key} without --allow-cross-node-write (allowed: ${envNodeId ? `${envNodeId} or __run__` : "__run__"}).`,
+      );
+    }
+
+    await kvPut({
+      dbPath,
+      nodeId,
+      key,
+      valueText,
+      runId: String(process.env.CHOREO_RUN_ID || "").trim() || null,
+      nowIso: nowIso(),
+    });
+    ui.event("done", `Wrote ${nodeId}:${key}`);
+    return;
+  }
+
+  throw new Error(`Unknown kv subcommand: ${sub}`);
 }
 
 function deriveCheckpointIdFromPath(checkpointPathAbs) {

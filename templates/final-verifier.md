@@ -22,6 +22,11 @@ Rules:
 - Use the DB for node context only (read any node key; write your own node keys).
 - Prefer `choreo kv ...` helpers when available; otherwise use `sqlite3 -json "$CHOREO_DB" ...`.
 
+KV cheat sheet:
+- Write (this node): `choreo kv put --key out.summary --value "..."` (uses `$CHOREO_NODE_ID`)
+- Write (shared): `choreo kv put --run --key ctx.decisions --value "..."` (uses `__run__`)
+- Read: `choreo kv get --node <id> --key out.summary --json`
+
 ### GOAL.md (truncated)
 {{GOAL_DRAFT}}
 
