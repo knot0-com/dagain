@@ -20,12 +20,12 @@ Choreo provides a SQLite DB for durable node/run context. Use it to store and lo
 Rules:
 - Do not write to workgraph tables (`nodes`/`deps`). Only Choreo mutates the workgraph.
 - Use the DB for node context only (read any node key; write your own node keys).
-- Prefer `choreo kv ...` helpers when available; otherwise use `sqlite3 -json "$CHOREO_DB" ...`.
+- Prefer `"$CHOREO_BIN" kv ...` helpers when available; otherwise use `sqlite3 -json "$CHOREO_DB" ...`.
 
 KV cheat sheet:
-- Write (this node): `choreo kv put --key out.summary --value "..."` (uses `$CHOREO_NODE_ID`)
-- Write (shared): `choreo kv put --run --key ctx.decisions --value "..."` (uses `__run__`)
-- Read: `choreo kv get --node <id> --key out.summary --json`
+- Write (this node): `"$CHOREO_BIN" kv put --key out.summary --value "..."` (uses `$CHOREO_NODE_ID`)
+- Write (shared): `"$CHOREO_BIN" kv put --run --key ctx.decisions --value "..."` (uses `__run__`)
+- Read: `"$CHOREO_BIN" kv get --node <id> --key out.summary --json`
 
 ### GOAL.md (truncated)
 {{GOAL_DRAFT}}
