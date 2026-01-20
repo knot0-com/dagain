@@ -1,0 +1,2552 @@
+import path from "node:path";
+import os from "node:os";
+import { access, chmod, chown, lstat, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { createInterface } from "node:readline/promises";
+import { constants as fsConstants } from "node:fs";
+
+import { parseArgs } from "./lib/args.js";
+import { sha256File } from "./lib/crypto.js";
+import { appendLine, ensureDir, pathExists, readJson, writeJsonAtomic } from "./lib/fs.js";
+import { choreoPaths, defaultConfig, loadConfig, saveConfig } from "./lib/config.js";
+import { defaultWorkgraph, loadWorkgraph, saveWorkgraph, countByStatus } from "./lib/workgraph.js";
+import { selectNextNode } from "./lib/select.js";
+import { formatBullets, renderTemplate } from "./lib/template.js";
+import { normalizeRunnerList, resolveNodeRole, resolveRoleRunnerPick, runRunnerCommand } from "./lib/runner.js";
+import { acquireSupervisorLock, heartbeatSupervisorLock, readSupervisorLock, releaseSupervisorLock } from "./lib/lock.js";
+import { createUi } from "./lib/ui.js";
+
+function usage() {
+  return `choreo
+
+Usage:
+  choreo [<goal...>] [--color] [--no-color]
+  choreo start [<goal...>] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
+  choreo init [--force] [--no-templates] [--goal="..."] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
+  choreo goal [--goal="..."] [--max-turns=<n>] [--runner=<name>] [--live] [--no-live] [--color] [--no-color]
+  choreo status
+  choreo run [--once] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
+  choreo resume [--once] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
+  choreo answer [--node=<id>] [--checkpoint=<file>] [--answer="..."] [--no-prompt]
+  choreo stop [--signal=<sig>]
+  choreo graph validate
+
+State:
+  .choreo/config.json
+  .choreo/workgraph.json
+`;
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function isPromptEnabled() {
+  if (process.stdin.isTTY && process.stdout.isTTY) return true;
+  return String(process.env.CHOREO_FORCE_PROMPT || "").trim() === "1";
+}
+
+let passwdByUidCache = null;
+
+async function lookupPasswdUserByUid(uid) {
+  const n = Number(uid);
+  if (!Number.isFinite(n) || n < 0) return null;
+  if (!passwdByUidCache) {
+    const map = new Map();
+    try {
+      const text = await readFile("/etc/passwd", "utf8");
+      for (const line of text.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const parts = trimmed.split(":");
+        if (parts.length < 7) continue;
+        const entryUid = Number(parts[2]);
+        const entryGid = Number(parts[3]);
+        if (!Number.isFinite(entryUid) || entryUid < 0) continue;
+        map.set(entryUid, {
+          username: parts[0],
+          gid: Number.isFinite(entryGid) ? entryGid : null,
+          home: parts[5] || null,
+        });
+      }
+    } catch {
+      // ignore
+    }
+    passwdByUidCache = map;
+  }
+  return passwdByUidCache.get(n) || null;
+}
+
+async function resolveSpawnIdentity({ rootDir }) {
+  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+  if (!isRoot) return null;
+
+  const sudoUid = Number(process.env.SUDO_UID || "");
+  const sudoGid = Number(process.env.SUDO_GID || "");
+  const hasSudoIds = Number.isFinite(sudoUid) && sudoUid > 0 && Number.isFinite(sudoGid) && sudoGid > 0;
+
+  if (hasSudoIds) {
+    const info = await lookupPasswdUserByUid(sudoUid);
+    const username = typeof info?.username === "string" && info.username ? info.username : String(process.env.SUDO_USER || "");
+    const home = typeof info?.home === "string" && info.home ? info.home : null;
+    return { uid: sudoUid, gid: sudoGid, username, home };
+  }
+
+  try {
+    const st = await stat(rootDir);
+    const uid = Number(st.uid);
+    const gid = Number(st.gid);
+    if (!Number.isFinite(uid) || uid <= 0) return null;
+    if (!Number.isFinite(gid) || gid <= 0) return null;
+    const info = await lookupPasswdUserByUid(uid);
+    const username = typeof info?.username === "string" && info.username ? info.username : "";
+    const home = typeof info?.home === "string" && info.home ? info.home : null;
+    return { uid, gid, username, home };
+  } catch {
+    return null;
+  }
+}
+
+function mergeEnv(a, b) {
+  if (!a && !b) return null;
+  const out = {};
+  if (a && typeof a === "object") Object.assign(out, a);
+  if (b && typeof b === "object") Object.assign(out, b);
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function envForIdentity(identity) {
+  if (!identity) return null;
+  const env = {};
+  if (identity.home) env.HOME = identity.home;
+  if (identity.username) {
+    env.USER = identity.username;
+    env.LOGNAME = identity.username;
+  }
+  return Object.keys(env).length > 0 ? env : null;
+}
+
+async function chownTree(rootPath, uid, gid, { maxEntries = 25_000 } = {}) {
+  const uidNum = Number(uid);
+  const gidNum = Number(gid);
+  if (!Number.isFinite(uidNum) || uidNum <= 0) return;
+  if (!Number.isFinite(gidNum) || gidNum <= 0) return;
+
+  let seen = 0;
+  async function visit(targetPath) {
+    seen += 1;
+    if (seen > maxEntries) throw new Error(`Refusing to chown >${maxEntries} entries under ${rootPath}`);
+
+    try {
+      await chown(targetPath, uidNum, gidNum);
+    } catch {
+      // ignore
+    }
+
+    let st = null;
+    try {
+      st = await lstat(targetPath);
+    } catch {
+      return;
+    }
+
+    if (!st.isDirectory()) return;
+    if (st.isSymbolicLink?.()) return;
+
+    let entries = [];
+    try {
+      entries = await readdir(targetPath, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const ent of entries) {
+      if (!ent?.name) continue;
+      await visit(path.join(targetPath, ent.name));
+    }
+  }
+
+  await visit(rootPath);
+}
+
+async function repairChoreoStateOwnership({ paths, ui }) {
+  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+  if (!isRoot) return;
+  if (!(await pathExists(paths.choreoDir))) return;
+
+  const identity = await resolveSpawnIdentity({ rootDir: paths.rootDir });
+  if (!identity) return;
+
+  try {
+    await chownTree(paths.choreoDir, identity.uid, identity.gid);
+    try {
+      await chmod(paths.choreoDir, 0o755);
+    } catch {
+      // ignore
+    }
+  } catch (error) {
+    ui?.event?.("warn", `Failed to repair .choreo ownership: ${error?.message || String(error)}`);
+  }
+}
+
+function resolveRunnerEnv({ runnerName, runner, cwd, paths }) {
+  const raw = runner?.env && typeof runner.env === "object" ? runner.env : null;
+  const out = raw ? { ...raw } : {};
+
+  // Claude Code uses os.tmpdir() for its scratchpad. If prior runs created a root-owned
+  // /tmp/claude directory, non-root runs can hit EACCES. Default TMPDIR into .choreo/tmp.
+  if (runnerName === "claude") {
+    // Claude also treats sudo-context env vars as a privileged context. Clear them so
+    // `--dangerously-skip-permissions` can work when the actual uid is not root.
+    for (const key of ["SUDO_USER", "SUDO_UID", "SUDO_GID", "SUDO_COMMAND", "SUDO_ASKPASS"]) {
+      if (!(key in out)) out[key] = null;
+    }
+
+    const hasTmp = Boolean(out.TMPDIR || out.TMP || out.TEMP);
+    if (!hasTmp && paths?.tmpDir) out.TMPDIR = paths.tmpDir;
+  }
+
+  for (const [key, value] of Object.entries(out)) {
+    if (value == null) out[key] = null;
+    else out[key] = String(value);
+  }
+
+  for (const key of ["TMPDIR", "TMP", "TEMP"]) {
+    const v = out[key];
+    if (!v) continue;
+    if (!path.isAbsolute(v)) out[key] = path.resolve(cwd, v);
+  }
+
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+async function ensureRunnerTmpDir(env) {
+  if (!env || typeof env !== "object") return;
+  const dir = env.TMPDIR || env.TMP || env.TEMP;
+  if (!dir) return;
+  try {
+    await ensureDir(dir);
+  } catch {
+    // ignore
+  }
+}
+
+function claudeProjectTmpKey(cwd) {
+  // Claude Code uses: /tmp/claude/<sanitized cwd>/<uuid>/scratchpad
+  // Example: /home/mojians/projects -> -home-mojians-projects
+  const abs = path.resolve(String(cwd || process.cwd()));
+  return abs.split(path.sep).join("-");
+}
+
+async function ensureClaudeProjectTmpWritable({ cwd, ui, uid = null, gid = null }) {
+  const baseDir = "/tmp/claude";
+  const projectDir = path.join(baseDir, claudeProjectTmpKey(cwd));
+
+  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+  const uidNum = Number(uid);
+  const gidNum = Number(gid);
+  const hasTargetUser = Number.isFinite(uidNum) && uidNum > 0 && Number.isFinite(gidNum) && gidNum > 0;
+
+  const sudoUid = Number(process.env.SUDO_UID || "");
+  const sudoGid = Number(process.env.SUDO_GID || "");
+  const hasSudoUser = Number.isFinite(sudoUid) && sudoUid > 0 && Number.isFinite(sudoGid) && sudoGid > 0;
+  const targetUid = hasTargetUser ? uidNum : sudoUid;
+  const targetGid = hasTargetUser ? gidNum : sudoGid;
+  const canChown = isRoot && ((hasTargetUser && targetUid > 0) || hasSudoUser);
+
+  // Ensure base exists so we can repair permissions deterministically.
+  try {
+    await ensureDir(baseDir);
+    if (canChown) {
+      try {
+        await chown(baseDir, targetUid, targetGid);
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    return;
+  }
+
+  let projectExists = false;
+  try {
+    const st = await stat(projectDir);
+    projectExists = st.isDirectory();
+  } catch {
+    projectExists = false;
+  }
+
+  if (!projectExists) {
+    // Precreate under correct ownership when running via sudo/root.
+    try {
+      await ensureDir(projectDir);
+      if (canChown) await chown(projectDir, targetUid, targetGid);
+    } catch {
+      // ignore
+    }
+    return;
+  }
+
+  try {
+    await access(projectDir, fsConstants.W_OK | fsConstants.X_OK);
+    if (canChown) {
+      try {
+        const entries = await readdir(projectDir, { withFileTypes: true });
+        for (const ent of entries) {
+          if (!ent.isDirectory()) continue;
+          const childPath = path.join(projectDir, ent.name);
+          try {
+            const st = await stat(childPath);
+            if (Number(st.uid) === 0) await chown(childPath, targetUid, targetGid);
+          } catch {
+            // ignore
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return;
+  } catch {
+    // continue
+  }
+
+  if (canChown) {
+    try {
+      await chown(projectDir, targetUid, targetGid);
+      try {
+        const entries = await readdir(projectDir, { withFileTypes: true });
+        for (const ent of entries) {
+          if (!ent.isDirectory()) continue;
+          const childPath = path.join(projectDir, ent.name);
+          try {
+            const st = await stat(childPath);
+            if (Number(st.uid) === 0) await chown(childPath, targetUid, targetGid);
+          } catch {
+            // ignore
+          }
+        }
+      } catch {
+        // ignore
+      }
+      return;
+    } catch {
+      // continue
+    }
+  }
+
+  // Non-root fallback: move aside the unwritable dir if possible.
+  const suffix = `stale-${nowIso().replace(/[:.]/g, "-")}-${Math.random().toString(16).slice(2, 8)}`;
+  const moved = `${projectDir}.${suffix}`;
+  try {
+    await rename(projectDir, moved);
+    await ensureDir(projectDir);
+    ui?.event?.("warn", `Claude tmp dir was not writable; moved aside: ${moved}`);
+  } catch {
+    // ignore; will fail downstream with a clearer error from Claude
+  }
+}
+
+function resolveLiveFlag(flags) {
+  const noLive = Boolean(flags["no-live"]) || Boolean(flags.noLive);
+  if (noLive) return false;
+  if (Boolean(flags.live)) return true;
+  return Boolean(process.stdout.isTTY && process.stderr.isTTY);
+}
+
+function resolveNoColorFlag(flags) {
+  if (Boolean(flags.color) || Boolean(flags["force-color"]) || Boolean(flags.forceColor)) return false;
+  return Boolean(flags["no-color"]) || Boolean(flags.noColor) || Boolean(flags.nocolor);
+}
+
+function resolveForceColorFlag(flags) {
+  return Boolean(flags.color) || Boolean(flags["force-color"]) || Boolean(flags.forceColor);
+}
+
+async function readStdinText() {
+  try {
+    if (process.stdin.isTTY) return "";
+    process.stdin.setEncoding("utf8");
+    let out = "";
+    for await (const chunk of process.stdin) out += chunk;
+    return out;
+  } catch {
+    return "";
+  }
+}
+
+function runId() {
+  const stamp = nowIso().replace(/[:.]/g, "-");
+  const rand = Math.random().toString(16).slice(2, 8);
+  return `${stamp}-${rand}`;
+}
+
+async function readBuiltInTemplate(role) {
+  const templatePath = new URL(`../templates/${role}.md`, import.meta.url);
+  return readFile(templatePath, "utf8");
+}
+
+async function resolveTemplate(rootDir, role) {
+  const { templatesDir } = choreoPaths(rootDir);
+  const localPath = path.join(templatesDir, `${role}.md`);
+  if (await pathExists(localPath)) return readFile(localPath, "utf8");
+  return readBuiltInTemplate(role);
+}
+
+async function copyTemplates(rootDir, { force = false } = {}) {
+  const { templatesDir } = choreoPaths(rootDir);
+  await ensureDir(templatesDir);
+  const roles = ["planner", "executor", "verifier", "integrator", "final-verifier", "goal-refiner"];
+  await Promise.all(
+    roles.map(async (role) => {
+      const src = await readBuiltInTemplate(role);
+      const dst = path.join(templatesDir, `${role}.md`);
+      if (force || !(await pathExists(dst))) await writeFile(dst, src, "utf8");
+    }),
+  );
+}
+
+async function initCommand(rootDir, flags) {
+  const paths = choreoPaths(rootDir);
+  const force = Boolean(flags.force);
+  const noTemplates = Boolean(flags["no-templates"]);
+  const noRefine = Boolean(flags["no-refine"]) || Boolean(flags.noRefine);
+  const goalFlag = typeof flags.goal === "string" ? flags.goal : "";
+  const maxTurnsRaw = flags["max-turns"] ?? 12;
+  const maxTurnsNum = Number(maxTurnsRaw);
+  const maxTurns = Number.isFinite(maxTurnsNum) && maxTurnsNum > 0 ? Math.floor(maxTurnsNum) : 12;
+  const live = resolveLiveFlag(flags);
+  const noColor = resolveNoColorFlag(flags);
+  const forceColor = resolveForceColorFlag(flags);
+
+  await ensureDir(paths.choreoDir);
+  await ensureDir(paths.checkpointsDir);
+  await ensureDir(paths.runsDir);
+  await ensureDir(paths.memoryDir);
+  await ensureDir(paths.templatesDir);
+  await ensureDir(paths.tmpDir);
+
+  const goalExists = await pathExists(paths.goalPath);
+  if (goalFlag) {
+    await writeFile(
+      paths.goalPath,
+      `# Goal\n\n${goalFlag.trim()}\n\n## Done means\n- (refine into measurable success criteria)\n`,
+      "utf8",
+    );
+  }
+
+  if (!(await pathExists(paths.goalPath))) {
+    await writeFile(
+      paths.goalPath,
+      `# Goal\n\nDescribe the unified human goal here.\n\n## Done means\n- (define measurable success criteria)\n`,
+      "utf8",
+    );
+  }
+
+  const goalHash = await sha256File(paths.goalPath);
+
+  let config = await loadConfig(paths.configPath);
+  if (!config || force) config = defaultConfig();
+  const roleFlagMap = {
+    main: "main",
+    planner: "planner",
+    executor: "executor",
+    verifier: "verifier",
+    integrator: "integrator",
+    researcher: "researcher",
+    "final-verifier": "finalVerifier",
+    finalVerifier: "finalVerifier",
+  };
+  let touchedConfig = force || !config;
+  for (const [flagKey, roleKey] of Object.entries(roleFlagMap)) {
+    const value = flags[flagKey];
+    if (typeof value === "string" && value.trim() !== "") {
+      const parsed = value
+        .split(",")
+        .map((v) => v.trim())
+        .filter(Boolean);
+      config.roles[roleKey] = parsed.length <= 1 ? parsed[0] : parsed;
+      touchedConfig = true;
+    }
+  }
+  if (touchedConfig || !(await pathExists(paths.configPath))) {
+    await saveConfig(paths.configPath, config);
+  }
+
+  if (force || !(await pathExists(paths.graphPath))) {
+    const graph = defaultWorkgraph("GOAL.md", goalHash);
+    graph.createdAt = nowIso();
+    await saveWorkgraph(paths.graphPath, graph);
+  } else {
+    const graph = await loadWorkgraph(paths.graphPath);
+    if (graph?.goal?.hash !== goalHash) {
+      graph.goal = { path: "GOAL.md", hash: goalHash };
+    }
+    if (Array.isArray(graph?.nodes) && graph.nodes.length === 0) {
+      graph.nodes.push(...defaultWorkgraph("GOAL.md", goalHash).nodes);
+    }
+    await saveWorkgraph(paths.graphPath, graph);
+  }
+
+  if (!noTemplates) await copyTemplates(rootDir, { force });
+
+  const activityPath = path.join(paths.memoryDir, "activity.log");
+  const errorsPath = path.join(paths.memoryDir, "errors.log");
+  const progressPath = path.join(paths.memoryDir, "progress.md");
+  const guardrailsPath = path.join(paths.memoryDir, "guardrails.md");
+  const patternsPath = path.join(paths.memoryDir, "patterns.md");
+  const goalDialogPath = path.join(paths.memoryDir, "goal-dialog.md");
+  const taskPlanPath = path.join(paths.memoryDir, "task_plan.md");
+  const findingsPath = path.join(paths.memoryDir, "findings.md");
+
+  if (!(await pathExists(progressPath))) await writeFile(progressPath, "# Choreo Progress\n", "utf8");
+  if (!(await pathExists(guardrailsPath))) await writeFile(guardrailsPath, "# Choreo Guardrails\n", "utf8");
+  if (!(await pathExists(patternsPath))) await writeFile(patternsPath, "# Choreo Patterns\n", "utf8");
+  if (!(await pathExists(activityPath))) await writeFile(activityPath, "", "utf8");
+  if (!(await pathExists(errorsPath))) await writeFile(errorsPath, "", "utf8");
+  if (!(await pathExists(goalDialogPath))) await writeFile(goalDialogPath, "# Goal Dialog\n", "utf8");
+  if (!(await pathExists(findingsPath))) await writeFile(findingsPath, defaultFindingsMarkdown(), "utf8");
+  if (!(await pathExists(taskPlanPath))) await writeFile(taskPlanPath, defaultTaskPlanMarkdown(), "utf8");
+
+  await appendLine(activityPath, `[${nowIso()}] init`);
+  try {
+    const graphAfterInit = await loadWorkgraph(paths.graphPath);
+    if (graphAfterInit) await syncTaskPlan({ paths, graph: graphAfterInit });
+  } catch {
+    // ignore
+  }
+
+  await repairChoreoStateOwnership({ paths });
+  process.stdout.write(`Initialized choreo state in ${paths.choreoDir}\n`);
+
+  if (goalFlag && !noRefine) {
+    if (!config) throw new Error("Missing .choreo/config.json after init");
+    await refineGoalInteractive({
+      rootDir,
+      paths,
+      config,
+      seedGoal: goalFlag,
+      maxTurns,
+      live,
+      noColor,
+      forceColor,
+    });
+  }
+}
+
+async function goalCommand(rootDir, flags) {
+  const paths = choreoPaths(rootDir);
+  const config = await loadConfig(paths.configPath);
+  if (!config) throw new Error("Missing .choreo/config.json. Run `choreo init` first.");
+
+  const goalFlag = typeof flags.goal === "string" ? flags.goal : "";
+  const maxTurnsRaw = flags["max-turns"] ?? 12;
+  const maxTurnsNum = Number(maxTurnsRaw);
+  const maxTurns = Number.isFinite(maxTurnsNum) && maxTurnsNum > 0 ? Math.floor(maxTurnsNum) : 12;
+  const runnerOverride = typeof flags.runner === "string" ? flags.runner.trim() : "";
+  const live = resolveLiveFlag(flags);
+  const noColor = resolveNoColorFlag(flags);
+  const forceColor = resolveForceColorFlag(flags);
+
+  if (goalFlag) {
+    await writeFile(
+      paths.goalPath,
+      `# Goal\n\n${goalFlag.trim()}\n\n## Done means\n- (refine into measurable success criteria)\n`,
+      "utf8",
+    );
+  } else if (!(await pathExists(paths.goalPath))) {
+    throw new Error("Missing GOAL.md. Provide `--goal \"...\"` or run `choreo init`.");
+  }
+
+  await refineGoalInteractive({
+    rootDir,
+    paths,
+    config,
+    seedGoal: goalFlag,
+    maxTurns,
+    runnerOverride: runnerOverride || null,
+    live,
+    noColor,
+    forceColor,
+  });
+}
+
+async function startCommand(rootDir, flags, positionalGoalTokens) {
+  const paths = choreoPaths(rootDir);
+  const live = resolveLiveFlag(flags);
+  const noRefine = Boolean(flags["no-refine"]) || Boolean(flags.noRefine);
+
+  const goalFlag = typeof flags.goal === "string" ? flags.goal.trim() : "";
+  const positionalGoal = Array.isArray(positionalGoalTokens) ? positionalGoalTokens.join(" ").trim() : "";
+
+  const hadConfig = await pathExists(paths.configPath);
+  const hadGoal = await pathExists(paths.goalPath);
+
+  let seedGoal = goalFlag || positionalGoal;
+  let seedGoalProvided = Boolean(seedGoal);
+
+  const canPrompt = isPromptEnabled();
+  if (!seedGoal && !process.stdin.isTTY) {
+    seedGoal = (await readStdinText()).trim();
+    seedGoalProvided = Boolean(seedGoal);
+  }
+
+  if (!seedGoal && canPrompt) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      const prompt = hadGoal ? "Goal (blank to keep existing): " : "Goal: ";
+      seedGoal = (await rl.question(prompt)).trim();
+      seedGoalProvided = Boolean(seedGoal);
+    } finally {
+      rl.close();
+    }
+  }
+
+  if (!seedGoal && !hadGoal) {
+    throw new Error('Missing goal. Provide a goal (interactive), pipe stdin, or use `--goal "..."`.');
+  }
+
+  // Initialize state if needed; keep goal refinement under explicit control here.
+  await initCommand(rootDir, {
+    ...flags,
+    goal: seedGoal || "",
+    "no-refine": true,
+    noRefine: true,
+  });
+
+  // Optional first-run config prompt.
+  let config = await loadConfig(paths.configPath);
+  if (!config) throw new Error("Missing .choreo/config.json after init");
+  if (!hadConfig && canPrompt) {
+    const runnerNames = Object.keys(config.runners || {}).sort();
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      const defaultMain = String(config.roles?.main || "claude");
+      const mainPrompt = `Main runner${runnerNames.length ? ` (${runnerNames.join(", ")})` : ""} [${defaultMain}]: `;
+      const main = (await rl.question(mainPrompt)).trim() || defaultMain;
+
+      const defaultExecutor = String(config.roles?.executor || "codex");
+      const execPrompt = `Executor runner [${defaultExecutor}]: `;
+      const executor = (await rl.question(execPrompt)).trim() || defaultExecutor;
+
+      const sharePrompt = "Use main runner for planner/verifier/integrator/finalVerifier? [Y/n]: ";
+      const share = ((await rl.question(sharePrompt)).trim() || "y").toLowerCase();
+      const shareMain = share !== "n" && share !== "no";
+
+      config.roles = config.roles || {};
+      config.roles.main = main;
+      config.roles.executor = executor;
+      if (shareMain) {
+        config.roles.planner = main;
+        config.roles.verifier = main;
+        config.roles.integrator = main;
+        config.roles.finalVerifier = main;
+      }
+      if (!config.roles.researcher) config.roles.researcher = "gemini";
+
+      await saveConfig(paths.configPath, config);
+    } finally {
+      rl.close();
+    }
+    config = await loadConfig(paths.configPath);
+    if (!config) throw new Error("Missing .choreo/config.json after saving");
+  }
+
+  // Refine goal only when a new seed goal was provided for this invocation.
+  if (seedGoalProvided && !noRefine) {
+    await goalCommand(rootDir, { ...flags, goal: seedGoal, live });
+  }
+
+  // Ensure graph has at least one planning node (older graphs may be empty).
+  const graph = await loadWorkgraph(paths.graphPath);
+  if (!graph) throw new Error("Missing .choreo/workgraph.json after init");
+  if (!Array.isArray(graph.nodes)) graph.nodes = [];
+  if (graph.nodes.length === 0) {
+    graph.nodes.push({
+      id: "plan-000",
+      title: "Expand GOAL.md into an executable workgraph",
+      type: "plan",
+      status: "open",
+      dependsOn: [],
+      ownership: [],
+      acceptance: [
+        "Adds 3–10 small, verifiable task/verify nodes",
+        "Each node includes ownership, acceptance, and verify steps",
+      ],
+      verify: [],
+      attempts: 0,
+      retryPolicy: { maxAttempts: 3 },
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    });
+    await saveWorkgraph(paths.graphPath, graph);
+  }
+
+  await runCommand(rootDir, { ...flags, live });
+}
+
+async function refineGoalInteractive({
+  rootDir,
+  paths,
+  config,
+  seedGoal,
+  maxTurns,
+  runnerOverride = null,
+  live = false,
+  noColor = false,
+  forceColor = false,
+}) {
+  const ui = createUi({ noColor, forceColor });
+  const cancel = installCancellation({ ui, label: "goal-refine" });
+  const abortSignal = cancel.signal;
+  const activityPath = path.join(paths.memoryDir, "activity.log");
+  const errorsPath = path.join(paths.memoryDir, "errors.log");
+  const goalDialogPath = path.join(paths.memoryDir, "goal-dialog.md");
+
+  await ensureDir(paths.memoryDir);
+  if (!(await pathExists(goalDialogPath))) await writeFile(goalDialogPath, "# Goal Dialog\n", "utf8");
+  if (!(await pathExists(activityPath))) await writeFile(activityPath, "", "utf8");
+  if (!(await pathExists(errorsPath))) await writeFile(errorsPath, "", "utf8");
+
+  if (seedGoal) {
+    await appendLine(goalDialogPath, `\n## [${nowIso()}] Seed Goal\n${seedGoal.trim()}\n`);
+  }
+
+  const canPrompt = isPromptEnabled();
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const spawnIdentity = await resolveSpawnIdentity({ rootDir: paths.rootDir });
+  const identityEnv = envForIdentity(spawnIdentity);
+  try {
+    for (let turn = 1; turn <= maxTurns; turn += 1) {
+      if (abortSignal.aborted) return;
+      const run = `goal-${runId()}`;
+      const runDir = path.join(paths.runsDir, run);
+      await ensureDir(runDir);
+
+      const packetPath = path.join(runDir, "packet.md");
+      const resultPath = path.join(runDir, "result.json");
+      const stdoutPath = path.join(runDir, "stdout.log");
+      const checkpointOutPath = path.join(paths.checkpointsDir, `checkpoint-${run}.json`);
+
+      const goalDraft = await readTextTruncated(paths.goalPath, 20_000);
+      const dialog = await readTextTruncated(goalDialogPath, 20_000);
+
+      const template = await resolveTemplate(rootDir, "goal-refiner");
+      const packet = renderTemplate(template, {
+        REPO_ROOT: paths.rootDir,
+        GOAL_PATH: paths.goalPath,
+        RUN_ID: run,
+        RESULT_PATH: resultPath,
+        CHECKPOINT_OUT_PATH: checkpointOutPath,
+        USER_GOAL: seedGoal || "",
+        GOAL_DRAFT: goalDraft,
+        GOAL_DIALOG: dialog,
+      });
+      await writeFile(packetPath, packet, "utf8");
+
+      const runnerName =
+        (runnerOverride && runnerOverride.length > 0 ? runnerOverride : null) ??
+        resolveRoleRunnerPick("main", config, { seed: run, attempt: Math.max(0, turn - 1) });
+      const runner = config.runners?.[runnerName];
+      if (!runner?.cmd) {
+        throw new Error(`Runner not configured: ${runnerName}. Check .choreo/config.json`);
+      }
+
+      await appendLine(activityPath, `[${nowIso()}] goal-refine turn=${turn} runner=${runnerName} run=${run}`);
+      ui.event("spawn", `goal-refine ${turn}/${maxTurns} runner=${runnerName} run=${run}`);
+      ui.detail(`log: ${stdoutPath}`);
+      if (live) ui.writeLine(ui.hr(`runner ${runnerName}`));
+      const spinner = !live ? ui.spinnerStart(`goal-refine ${turn}/${maxTurns} (${runnerName})`) : null;
+      const runnerEnv = mergeEnv(resolveRunnerEnv({ runnerName, runner, cwd: paths.rootDir, paths }), identityEnv);
+      await ensureRunnerTmpDir(runnerEnv);
+      if (runnerName === "claude")
+        await ensureClaudeProjectTmpWritable({ cwd: paths.rootDir, ui, uid: spawnIdentity?.uid, gid: spawnIdentity?.gid });
+      const execRes = await runRunnerCommand({
+        cmd: runner.cmd,
+        packetPath,
+        cwd: paths.rootDir,
+        logPath: stdoutPath,
+        timeoutMs: Number(runner.timeoutMs ?? config?.supervisor?.goalRefineTimeoutMs ?? 120_000),
+        tee: Boolean(live),
+        teePrefix: live ? { stdout: ui.c.gray("│") + " ", stderr: ui.c.gray("│") + " " } : null,
+        abortSignal,
+        env: runnerEnv,
+        uid: spawnIdentity?.uid ?? null,
+        gid: spawnIdentity?.gid ?? null,
+      });
+      spinner?.stop?.();
+      if (live) ui.writeLine(ui.hr());
+      if (execRes.aborted || abortSignal.aborted) {
+        await appendLine(activityPath, `[${nowIso()}] goal-refine cancelled run=${run}`);
+        return;
+      }
+
+      let result = await safeReadResult(resultPath);
+      if (!result) {
+        const stdoutText = await readTextTruncated(stdoutPath, 200_000);
+        const extracted = extractResultJson(stdoutText);
+        if (extracted) {
+          result = normalizeGoalRefineResult(extracted, run);
+          await writeJsonAtomic(resultPath, result);
+        }
+      }
+      if (!result) {
+        const tail = await readTextTruncated(stdoutPath, 2_000);
+        await appendLine(errorsPath, `[${nowIso()}] goal-refine missing result.json run=${run} code=${execRes.code}`);
+        throw new Error(
+          `Goal refinement failed (missing result.json).\n` +
+            `Runner exit: code=${execRes.code}${execRes.signal ? ` signal=${execRes.signal}` : ""}\n` +
+            `Log: ${stdoutPath}\n` +
+            `Log tail:\n${tail}`,
+        );
+      }
+
+      const goalMarkdown = typeof result.goalMarkdown === "string" ? result.goalMarkdown.trim() : "";
+      if (goalMarkdown) await writeFile(paths.goalPath, goalMarkdown.endsWith("\n") ? goalMarkdown : goalMarkdown + "\n", "utf8");
+
+      const status = String(result.status || "").toLowerCase();
+      if (status === "success") {
+        await appendLine(activityPath, `[${nowIso()}] goal-refine complete run=${run}`);
+        process.stdout.write(`GOAL.md updated.\n`);
+        return;
+      }
+
+      if (status !== "checkpoint") {
+        await appendLine(errorsPath, `[${nowIso()}] goal-refine failed run=${run} status=${status}`);
+        throw new Error(`Goal refinement failed (status=${status}). See: ${stdoutPath}`);
+      }
+
+      let checkpoint = await safeReadJson(checkpointOutPath);
+      if (!checkpoint) {
+        checkpoint = buildCheckpointFromResult(result, run);
+        if (checkpoint) await writeJsonAtomic(checkpointOutPath, checkpoint);
+      }
+      if (!checkpoint) throw new Error(`Checkpoint missing/invalid. Expected: ${checkpointOutPath}`);
+
+      const question = String(checkpoint.question || checkpoint.prompt || "").trim();
+      const context = String(checkpoint.context || "").trim();
+      const options = Array.isArray(checkpoint.options) ? checkpoint.options.map((o) => String(o)) : [];
+
+      if (!question) throw new Error(`Checkpoint missing question text. File: ${checkpointOutPath}`);
+
+      process.stdout.write("\n---\n");
+      process.stdout.write(`Goal refinement question (${turn}/${maxTurns}):\n${question}\n`);
+      if (context) process.stdout.write(`\nContext:\n${context}\n`);
+      if (options.length > 0) {
+        process.stdout.write("\nOptions:\n");
+        for (const opt of options) process.stdout.write(`- ${opt}\n`);
+      }
+
+      if (!canPrompt) {
+        process.stdout.write(
+          `\n(stdin is not interactive; cannot collect an answer)\n` +
+            `Checkpoint: ${checkpointOutPath}\n` +
+            `Rerun with a TTY (or use an interactive terminal) to continue.\n`,
+        );
+        return;
+      }
+
+      let answer = "";
+      try {
+        answer = (await rl.question("\nYour answer (or 'quit'): ", { signal: abortSignal })).trim();
+      } catch (error) {
+        if (abortSignal.aborted) return;
+        process.stdout.write(
+          `\nFailed to read answer from stdin.\n` +
+            `Checkpoint: ${checkpointOutPath}\n` +
+            `Error: ${error?.message || String(error)}\n`,
+        );
+        return;
+      }
+      if (!answer) {
+        process.stdout.write("Answer was empty. Aborting refinement.\n");
+        return;
+      }
+      if (answer.toLowerCase() === "quit" || answer.toLowerCase() === "exit") {
+        process.stdout.write("Aborted.\n");
+        return;
+      }
+
+      const responsePath = path.join(paths.checkpointsDir, `response-${run}.json`);
+      await writeJsonAtomic(responsePath, {
+        version: 1,
+        id: run,
+        answeredAt: nowIso(),
+        answer,
+      });
+
+      await appendLine(goalDialogPath, `\n## [${nowIso()}] Question\n${question}\n`);
+      await appendLine(goalDialogPath, `\n## [${nowIso()}] Answer\n${answer}\n`);
+      await appendLine(activityPath, `[${nowIso()}] goal-refine answered run=${run}`);
+    }
+
+    process.stdout.write(`Reached max turns (${maxTurns}).\n`);
+  } finally {
+    rl.close();
+    cancel.cleanup();
+    await repairChoreoStateOwnership({ paths, ui });
+  }
+}
+
+function normalizeGoalRefineResult(result, runIdStr) {
+  const out = typeof result === "object" && result ? { ...result } : {};
+  out.version = Number(out.version || 1);
+  if (!out.runId) out.runId = runIdStr;
+  if (!out.role) out.role = "goalRefiner";
+  return out;
+}
+
+function buildCheckpointFromResult(result, runIdStr) {
+  const checkpoint = result?.checkpoint && typeof result.checkpoint === "object" ? result.checkpoint : null;
+  const question = String(checkpoint?.question || result?.question || result?.prompt || "").trim();
+  if (!question) return null;
+  const context = String(checkpoint?.context || result?.context || "").trim();
+  const optionsRaw = checkpoint?.options ?? result?.options ?? [];
+  const options = Array.isArray(optionsRaw) ? optionsRaw.map((o) => String(o)) : [];
+  const resumeSignal = String(checkpoint?.resumeSignal || result?.resumeSignal || "Answer in plain text").trim();
+  return {
+    version: 1,
+    id: runIdStr,
+    type: String(checkpoint?.type || "goal-question"),
+    question,
+    context,
+    options,
+    resumeSignal,
+  };
+}
+
+function extractResultJson(text) {
+  const t = String(text || "");
+
+  // Preferred: <result>{...}</result>
+  const tagRe = /<result>\s*([\s\S]*?)\s*<\/result>/gi;
+  for (let m = tagRe.exec(t); m; m = tagRe.exec(t)) {
+    const candidate = String(m[1] || "").trim();
+    const parsed = safeJsonParse(candidate);
+    if (parsed) return parsed;
+  }
+
+  // Common: ```json ... ```
+  const fenceRe = /```json\s*([\s\S]*?)```/gi;
+  for (let m = fenceRe.exec(t); m; m = fenceRe.exec(t)) {
+    const candidate = String(m[1] || "").trim();
+    const parsed = safeJsonParse(candidate);
+    if (parsed) return parsed;
+  }
+
+  // Fallback: whole output is JSON
+  const trimmed = t.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    const parsed = safeJsonParse(trimmed);
+    if (parsed) return parsed;
+  }
+
+  return null;
+}
+
+function safeJsonParse(candidate) {
+  try {
+    const parsed = JSON.parse(candidate);
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function readTextTruncated(filePath, maxChars) {
+  try {
+    const text = await readFile(filePath, "utf8");
+    if (text.length <= maxChars) return text;
+    return text.slice(text.length - maxChars);
+  } catch {
+    return "";
+  }
+}
+
+async function safeReadJson(jsonPath) {
+  try {
+    return await readJson(jsonPath);
+  } catch {
+    return null;
+  }
+}
+
+function formatNodeLine(node) {
+  const id = node?.id || "(missing-id)";
+  const title = node?.title || "(untitled)";
+  const type = node?.type || "(type?)";
+  const status = node?.status || "(status?)";
+  return `${id} [${type}] (${status}) — ${title}`;
+}
+
+async function statusCommand(rootDir) {
+  const paths = choreoPaths(rootDir);
+  const graph = await loadWorkgraph(paths.graphPath);
+  if (!graph) throw new Error("Missing .choreo/workgraph.json. Run `choreo init`.");
+
+  const counts = countByStatus(graph.nodes);
+  process.stdout.write("Workgraph status\n");
+  for (const key of Object.keys(counts).sort()) {
+    process.stdout.write(`- ${key}: ${counts[key]}\n`);
+  }
+
+  const next = selectNextNode(graph);
+  if (next) {
+    process.stdout.write("\nNext runnable:\n");
+    process.stdout.write(`- ${formatNodeLine(next)}\n`);
+  } else {
+    process.stdout.write("\nNext runnable:\n- (none)\n");
+  }
+
+  const needsHuman = (graph.nodes || []).filter((n) => String(n?.status || "").toLowerCase() === "needs_human");
+  if (needsHuman.length > 0) {
+    process.stdout.write("\nNeeds human:\n");
+    for (const node of needsHuman) {
+      let cpPath = node?.checkpoint?.path ? String(node.checkpoint.path) : "";
+      let cpQuestion = node?.checkpoint?.question ? String(node.checkpoint.question) : "";
+      if (!cpPath || !cpQuestion) {
+        try {
+          const resolved = await resolveCheckpointForAnswer({ paths, graph, nodeId: node.id, checkpointFile: "" });
+          cpPath = path.relative(paths.rootDir, resolved.checkpointPathAbs);
+          cpQuestion = String(resolved?.checkpoint?.question || "").trim() || cpQuestion;
+        } catch {
+          // ignore
+        }
+      }
+      process.stdout.write(`- ${node.id}${cpQuestion ? ` — ${cpQuestion}` : ""}\n`);
+      if (cpPath) process.stdout.write(`  checkpoint: ${cpPath}\n`);
+    }
+    process.stdout.write("\nTip: `choreo answer` to respond and resume.\n");
+  }
+
+  const checkpointFiles = await listCheckpoints(paths.checkpointsDir);
+  if (checkpointFiles.length > 0) {
+    process.stdout.write("\nCheckpoints:\n");
+    for (const file of checkpointFiles) process.stdout.write(`- ${file}\n`);
+  }
+}
+
+async function listCheckpoints(checkpointsDir) {
+  try {
+    const { readdir } = await import("node:fs/promises");
+    const files = await readdir(checkpointsDir);
+    return files.filter((f) => f.startsWith("checkpoint-") && f.endsWith(".json")).sort();
+  } catch {
+    return [];
+  }
+}
+
+function validateGraph(graph) {
+  if (!graph || typeof graph !== "object") throw new Error("workgraph.json must be an object");
+  if (!Array.isArray(graph.nodes)) throw new Error("workgraph.json nodes must be an array");
+
+  const ids = new Set();
+  for (const node of graph.nodes) {
+    if (!node || typeof node !== "object") throw new Error("node must be an object");
+    if (!node.id || typeof node.id !== "string") throw new Error("node.id must be a string");
+    if (ids.has(node.id)) throw new Error(`duplicate node id: ${node.id}`);
+    ids.add(node.id);
+  }
+
+  // Cycle detection (DFS)
+  const index = new Map(graph.nodes.map((n) => [n.id, n]));
+  const visiting = new Set();
+  const visited = new Set();
+
+  function dfs(id) {
+    if (visited.has(id)) return;
+    if (visiting.has(id)) throw new Error(`cycle detected at node: ${id}`);
+    visiting.add(id);
+    const node = index.get(id);
+    const deps = Array.isArray(node?.dependsOn) ? node.dependsOn : [];
+    for (const dep of deps) {
+      if (index.has(dep)) dfs(dep);
+    }
+    visiting.delete(id);
+    visited.add(id);
+  }
+
+  for (const id of ids) dfs(id);
+}
+
+async function graphValidateCommand(rootDir) {
+  const paths = choreoPaths(rootDir);
+  const graph = await loadWorkgraph(paths.graphPath);
+  if (!graph) throw new Error("Missing .choreo/workgraph.json. Run `choreo init`.");
+  validateGraph(graph);
+  process.stdout.write("workgraph.json OK\n");
+}
+
+function allDone(graph) {
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  if (nodes.length === 0) return false;
+  return nodes.every((n) => String(n?.status || "").toLowerCase() === "done");
+}
+
+function normalizeStatus(status) {
+  return String(status || "").toLowerCase();
+}
+
+function diagnoseNoRunnableNodes(graph) {
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  const statusById = new Map();
+  for (const n of nodes) {
+    if (!n || typeof n !== "object") continue;
+    if (!n.id || typeof n.id !== "string") continue;
+    statusById.set(n.id, normalizeStatus(n.status));
+  }
+
+  const failed = nodes.filter((n) => normalizeStatus(n?.status) === "failed").map((n) => n.id);
+  const openNodes = nodes.filter((n) => normalizeStatus(n?.status) === "open");
+
+  const blockedByFailed = [];
+  const blockedByMissing = [];
+  const failedDeps = new Set();
+  const missingDeps = new Set();
+
+  for (const node of openNodes) {
+    const deps = Array.isArray(node?.dependsOn) ? node.dependsOn : [];
+    const nodeFailedDeps = [];
+    const nodeMissingDeps = [];
+    for (const dep of deps) {
+      const depId = String(dep || "").trim();
+      if (!depId) continue;
+      const depStatus = statusById.get(depId);
+      if (!depStatus) {
+        nodeMissingDeps.push(depId);
+        missingDeps.add(depId);
+        continue;
+      }
+      if (depStatus === "failed") {
+        nodeFailedDeps.push(depId);
+        failedDeps.add(depId);
+      }
+    }
+    if (nodeFailedDeps.length > 0) blockedByFailed.push({ nodeId: node.id, failedDeps: nodeFailedDeps });
+    if (nodeMissingDeps.length > 0) blockedByMissing.push({ nodeId: node.id, missingDeps: nodeMissingDeps });
+  }
+
+  return {
+    failed,
+    open: openNodes.map((n) => n.id),
+    blockedByFailed,
+    blockedByMissing,
+    failedDeps: [...failedDeps].sort(),
+    missingDeps: [...missingDeps].sort(),
+  };
+}
+
+async function runCommand(rootDir, flags) {
+  const paths = choreoPaths(rootDir);
+  const config = await loadConfig(paths.configPath);
+  const graph = await loadWorkgraph(paths.graphPath);
+  if (!config) throw new Error("Missing .choreo/config.json. Run `choreo init`.");
+  if (!graph) throw new Error("Missing .choreo/workgraph.json. Run `choreo init`.");
+  if (!Array.isArray(graph.nodes) || graph.nodes.length === 0) {
+    process.stderr.write("No nodes in .choreo/workgraph.json. Run `choreo start` (or `choreo init --force`) to seed a plan node.\n");
+    return;
+  }
+
+  const once = Boolean(flags.once);
+  const dryRun = Boolean(flags["dry-run"]);
+  const live = resolveLiveFlag(flags);
+  const ui = createUi({ noColor: resolveNoColorFlag(flags), forceColor: resolveForceColorFlag(flags) });
+  const cancel = installCancellation({ ui, label: "run" });
+  const abortSignal = cancel.signal;
+  const canPrompt = isPromptEnabled();
+  const noPrompt = Boolean(flags["no-prompt"]) || Boolean(flags.noPrompt);
+  const intervalMsRaw = flags["interval-ms"] ?? config.supervisor?.idleSleepMs ?? 2000;
+  const intervalMsNum = Number(intervalMsRaw);
+  const intervalMs = Number.isFinite(intervalMsNum) && intervalMsNum >= 0 ? intervalMsNum : 2000;
+
+  const maxIterationsRaw = flags["max-iterations"] ?? 0;
+  const maxIterationsNum = Number(maxIterationsRaw);
+  const maxIterations = Number.isFinite(maxIterationsNum) && maxIterationsNum >= 0 ? maxIterationsNum : 0;
+  const staleLockSeconds = Number(config.supervisor?.staleLockSeconds ?? 3600);
+  const autoResetFailedMaxRaw = config.supervisor?.autoResetFailedMax ?? 1;
+  const autoResetFailedMaxNum = Number(autoResetFailedMaxRaw);
+  const autoResetFailedMax = Number.isFinite(autoResetFailedMaxNum) && autoResetFailedMaxNum >= 0 ? autoResetFailedMaxNum : 1;
+
+  const activityPath = path.join(paths.memoryDir, "activity.log");
+  const errorsPath = path.join(paths.memoryDir, "errors.log");
+
+  ui.writeLine(ui.hr("choreo run"));
+  ui.detail(`root: ${paths.rootDir}`);
+  ui.detail(`goal: ${path.relative(paths.rootDir, paths.goalPath) || "GOAL.md"}`);
+  ui.detail(`state: ${path.relative(paths.rootDir, paths.choreoDir) || ".choreo"}`);
+  ui.writeLine(ui.hr());
+
+  let acquired = false;
+  await repairChoreoStateOwnership({ paths, ui });
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const acquireRes = await acquireSupervisorLock(paths.lockPath, { staleSeconds: staleLockSeconds });
+    if (acquireRes.ok) {
+      acquired = true;
+      break;
+    }
+
+    const lock = acquireRes.lock || {};
+    const pid = Number(lock.pid);
+    ui.event(
+      "warn",
+      `Supervisor already running pid=${lock.pid || "?"} host=${lock.host || "?"}.` +
+        (canPrompt && !noPrompt ? " Stop it and take over?" : " Use `choreo stop` or wait."),
+    );
+
+    if (!canPrompt || noPrompt) {
+      process.exitCode = 2;
+      cancel.cleanup();
+      return;
+    }
+
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    let choice = "";
+    try {
+      choice = (await rl.question("Stop the running supervisor? [y/N]: ", { signal: abortSignal })).trim().toLowerCase();
+    } finally {
+      rl.close();
+    }
+    if (!choice || (choice !== "y" && choice !== "yes")) {
+      cancel.cleanup();
+      return;
+    }
+
+    if (!Number.isFinite(pid) || pid <= 0) {
+      ui.event("warn", "Invalid supervisor PID in lock file.");
+      process.exitCode = 2;
+      cancel.cleanup();
+      return;
+    }
+
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch (error) {
+      ui.event("warn", `Failed to stop supervisor pid=${pid}: ${error?.message || String(error)}`);
+      process.exitCode = 2;
+      cancel.cleanup();
+      return;
+    }
+
+    const spinner = ui.spinnerStart(`waiting for pid ${pid} to exit`);
+    const deadlineMs = Date.now() + 10_000;
+    while (!abortSignal.aborted && Date.now() < deadlineMs) {
+      try {
+        process.kill(pid, 0);
+      } catch (error) {
+        if (error?.code !== "EPERM") break;
+      }
+      await sleep(200, abortSignal);
+    }
+    spinner.stop();
+  }
+
+  if (!acquired) {
+    process.exitCode = 2;
+    cancel.cleanup();
+    return;
+  }
+
+  await appendLine(activityPath, `[${nowIso()}] supervisor-start pid=${process.pid}`);
+
+  let iter = 0;
+  let lastIdleReason = "";
+  let lastHeartbeatMs = 0;
+  let lastCountsSig = "";
+  // eslint-disable-next-line no-constant-condition
+  try {
+    while (true) {
+      iter += 1;
+      if (abortSignal.aborted) {
+        await appendLine(activityPath, `[${nowIso()}] supervisor-cancel pid=${process.pid}`);
+        return;
+      }
+      if (maxIterations > 0 && iter > maxIterations) {
+        process.stdout.write(`Reached max iterations (${maxIterations}).\n`);
+        return;
+      }
+
+      const nowMs = Date.now();
+      if (nowMs - lastHeartbeatMs > 1000) {
+        lastHeartbeatMs = nowMs;
+        try {
+          await heartbeatSupervisorLock(paths.lockPath);
+        } catch {
+          // ignore
+        }
+      }
+
+      const currentGraph = await loadWorkgraph(paths.graphPath);
+      if (!currentGraph) throw new Error("workgraph.json disappeared");
+
+      if (clearStaleLocks(currentGraph, staleLockSeconds)) {
+        await saveWorkgraph(paths.graphPath, currentGraph);
+      }
+
+      const scaffold = ensurePlannerScaffolding({ graph: currentGraph, config });
+      if (scaffold.updated) {
+        await saveWorkgraph(paths.graphPath, currentGraph);
+        await syncTaskPlan({ paths, graph: currentGraph });
+        ui.event(
+          "info",
+          `Planner scaffolding ${
+            scaffold.addedIds.length > 0
+              ? `added ${scaffold.addedIds.length} node${scaffold.addedIds.length === 1 ? "" : "s"}`
+              : "updated deps"
+          }.`,
+        );
+        continue;
+      }
+
+      const node = selectNextNode(currentGraph);
+      if (!node) {
+        if (allDone(currentGraph)) {
+          ui.event("done", "All nodes done.");
+          return;
+        }
+        if (once) return;
+        const counts = countByStatus(currentGraph.nodes);
+        const countsSig = stableCountsSig(counts);
+        if (countsSig !== lastCountsSig) {
+          lastCountsSig = countsSig;
+          ui.event("info", `queue: ${ui.formatCounts(counts)}`);
+        }
+        const needsHuman = Number(counts.needs_human || 0);
+        const openCount = Number(counts.open || 0);
+        const failedCount = Number(counts.failed || 0);
+        const terminalOnly = needsHuman === 0 && openCount === 0 && Number(counts.in_progress || 0) === 0;
+        if (terminalOnly) {
+          if (failedCount > 0) {
+            const failedIds = (Array.isArray(currentGraph.nodes) ? currentGraph.nodes : [])
+              .filter((n) => normalizeStatus(n?.status) === "failed")
+              .map((n) => n.id)
+              .filter(Boolean);
+            ui.event("fail", `No runnable nodes. ${failedCount} node${failedCount === 1 ? "" : "s"} failed.`);
+            if (failedIds.length > 0) ui.detail(`failed: ${failedIds.join(", ")}`);
+            process.exitCode = 1;
+            return;
+          }
+        }
+
+        const diag = diagnoseNoRunnableNodes(currentGraph);
+        const isBlockedByFailed = diag.failedDeps.length > 0 && openCount > 0;
+        const isBlockedByMissing = diag.missingDeps.length > 0 && openCount > 0;
+        const idleReason = needsHuman > 0 ? "needs_human" : isBlockedByFailed ? "blocked_failed" : isBlockedByMissing ? "blocked_missing" : "idle";
+
+        if (idleReason !== lastIdleReason) {
+          lastIdleReason = idleReason;
+          if (idleReason === "needs_human") {
+            ui.event(
+              "checkpoint",
+              canPrompt && !noPrompt
+                ? `Waiting for human input (${needsHuman} node${needsHuman === 1 ? "" : "s"}). Answer below to continue.`
+                : `Waiting for human input (${needsHuman} node${needsHuman === 1 ? "" : "s"}). Run \`choreo answer\` or \`choreo status\`.`,
+            );
+          } else if (idleReason === "blocked_failed") {
+            ui.event(
+              "fail",
+              `No runnable nodes. ${openCount} open node${openCount === 1 ? "" : "s"} blocked by failed deps: ${diag.failedDeps.join(", ")}`,
+            );
+          } else if (idleReason === "blocked_missing") {
+            ui.event(
+              "fail",
+              `No runnable nodes. ${openCount} open node${openCount === 1 ? "" : "s"} blocked by missing deps: ${diag.missingDeps.join(", ")}`,
+            );
+          }
+        }
+
+        if (idleReason === "needs_human" && !noPrompt && canPrompt) {
+          let answered = false;
+          try {
+            answered = await answerNeedsHumanInteractive({ paths, graph: currentGraph, ui, abortSignal });
+          } catch (error) {
+            ui.event("warn", `Failed to collect checkpoint answer: ${error?.message || String(error)}`);
+          }
+          if (answered) continue;
+          // User chose to quit (or aborted). Exit supervisor so the terminal doesn't appear stuck.
+          return;
+        }
+
+        if (idleReason === "blocked_failed") {
+          const nodes = Array.isArray(currentGraph.nodes) ? currentGraph.nodes : [];
+          const byId = new Map(nodes.map((n) => [n.id, n]));
+          const toReset = [];
+          for (const depId of diag.failedDeps) {
+            const failedNode = byId.get(depId);
+            if (!failedNode) continue;
+            const resetCount = Number(failedNode.autoResetCount || 0);
+            if (resetCount >= autoResetFailedMax) continue;
+            toReset.push(depId);
+          }
+
+          if (toReset.length > 0) {
+            const now = nowIso();
+            for (const depId of toReset) {
+              const failedNode = byId.get(depId);
+              if (!failedNode) continue;
+              failedNode.status = "open";
+              failedNode.lock = null;
+              failedNode.attempts = 0;
+              failedNode.checkpoint = null;
+              failedNode.autoResetCount = Number(failedNode.autoResetCount || 0) + 1;
+              failedNode.lastAutoResetAt = now;
+              failedNode.updatedAt = now;
+            }
+            await saveWorkgraph(paths.graphPath, currentGraph);
+            await syncTaskPlan({ paths, graph: currentGraph });
+            await appendLine(activityPath, `[${now}] auto-reset failed nodes: ${toReset.join(", ")}`);
+
+            const progressPath = path.join(paths.memoryDir, "progress.md");
+            const lines = [];
+            lines.push("");
+            lines.push(`## [${now}] Auto-reset failed nodes`);
+            lines.push(`- nodes: ${toReset.join(", ")}`);
+            lines.push(`- reason: open nodes blocked by failed deps`);
+            await writeFile(progressPath, lines.join("\n") + "\n", { encoding: "utf8", flag: "a" });
+
+            ui.event("warn", `Reopened failed node${toReset.length === 1 ? "" : "s"}: ${toReset.join(", ")}. Continuing...`);
+            continue;
+          }
+
+          if (canPrompt && !noPrompt) {
+            const rl = createInterface({ input: process.stdin, output: process.stdout });
+            let choice = "";
+            try {
+              const prompt = `Retry failed deps again? (${diag.failedDeps.join(", ")}) [y/N]: `;
+              choice = (await rl.question(prompt, { signal: abortSignal })).trim().toLowerCase();
+            } finally {
+              rl.close();
+            }
+            if (choice === "y" || choice === "yes") {
+              const now = nowIso();
+              for (const depId of diag.failedDeps) {
+                const failedNode = byId.get(depId);
+                if (!failedNode) continue;
+                failedNode.status = "open";
+                failedNode.lock = null;
+                failedNode.attempts = 0;
+                failedNode.checkpoint = null;
+                failedNode.manualResetCount = Number(failedNode.manualResetCount || 0) + 1;
+                failedNode.lastManualResetAt = now;
+                failedNode.updatedAt = now;
+              }
+              await saveWorkgraph(paths.graphPath, currentGraph);
+              await syncTaskPlan({ paths, graph: currentGraph });
+              await appendLine(activityPath, `[${now}] manual-reset failed nodes: ${diag.failedDeps.join(", ")}`);
+              ui.event("warn", `Reopened failed deps. Continuing...`);
+              continue;
+            }
+            return;
+          }
+
+          // Non-interactive: exit rather than sleeping forever.
+          process.exitCode = 1;
+          return;
+        }
+
+        if (idleReason === "blocked_missing") {
+          process.exitCode = 1;
+          return;
+        }
+
+        await appendLine(activityPath, `[${nowIso()}] idle`);
+        await sleep(intervalMs, abortSignal);
+        continue;
+      }
+
+      lastIdleReason = "";
+      const counts = countByStatus(currentGraph.nodes);
+      const countsSig = stableCountsSig(counts);
+      if (countsSig !== lastCountsSig) {
+        lastCountsSig = countsSig;
+        ui.event("info", `queue: ${ui.formatCounts(counts)}`);
+      }
+      ui.event("select", ui.formatNode(node));
+      await appendLine(activityPath, `[${nowIso()}] select ${node.id}`);
+
+      if (dryRun) {
+        if (once) return;
+        await sleep(0, abortSignal);
+        continue;
+      }
+
+      const run = runId();
+      await executeNode({
+        rootDir,
+        paths,
+        config,
+        graph: currentGraph,
+        node,
+        run,
+        activityPath,
+        errorsPath,
+        live,
+        ui,
+        abortSignal,
+      });
+      await repairChoreoStateOwnership({ paths, ui });
+      if (once) return;
+    }
+  } finally {
+    cancel.cleanup();
+    await appendLine(activityPath, `[${nowIso()}] supervisor-exit pid=${process.pid}`);
+    await releaseSupervisorLock(paths.lockPath);
+    await repairChoreoStateOwnership({ paths, ui });
+  }
+}
+
+function clearStaleLocks(graph, staleSeconds) {
+  const host = os.hostname();
+  const shouldCheckAge = Number.isFinite(staleSeconds) && staleSeconds > 0;
+  const now = Date.now();
+  let changed = false;
+  for (const node of Array.isArray(graph?.nodes) ? graph.nodes : []) {
+    const lock = node?.lock;
+    if (!lock?.runId || !lock?.startedAt) continue;
+    let stale = false;
+    const pid = Number(lock.pid);
+    const lockHost = typeof lock.host === "string" ? lock.host : "";
+    if (Number.isFinite(pid) && pid > 0 && lockHost === host) {
+      try {
+        process.kill(pid, 0);
+      } catch (error) {
+        // EPERM => process exists but we can't signal it; treat as alive.
+        if (error?.code !== "EPERM") stale = true;
+      }
+    }
+    if (!stale && shouldCheckAge) {
+      const started = new Date(lock.startedAt).getTime();
+      if (!Number.isNaN(started) && (now - started) / 1000 > staleSeconds) stale = true;
+    }
+    if (!stale) continue;
+    node.lock = null;
+    if (String(node.status || "").toLowerCase() === "in_progress") node.status = "open";
+    node.updatedAt = nowIso();
+    changed = true;
+  }
+  return changed;
+}
+
+async function executeNode({ rootDir, paths, config, graph, node, run, activityPath, errorsPath, live = false, ui, abortSignal = null }) {
+  const consoleUi = ui || createUi({ noColor: false });
+  const spawnIdentity = await resolveSpawnIdentity({ rootDir: paths.rootDir });
+  const identityEnv = envForIdentity(spawnIdentity);
+  // Lock + mark in progress
+  const now = nowIso();
+  node.status = "in_progress";
+  node.lock = { runId: run, startedAt: now, pid: process.pid, host: os.hostname() };
+  node.attempts = Number(node.attempts || 0);
+  node.updatedAt = now;
+  await saveWorkgraph(paths.graphPath, graph);
+
+  const runDir = path.join(paths.runsDir, run);
+  await ensureDir(runDir);
+
+  const role = resolveNodeRole(node);
+  let runnerName = typeof node?.runner === "string" ? node.runner.trim() : "";
+  if (!runnerName) {
+    runnerName = resolveRoleRunnerPick(role, config, { seed: node.id, attempt: Number(node.attempts || 0) });
+  }
+
+  const claudeSensitiveFallback = String(config.supervisor?.claudeSensitiveFallbackRunner || "codex").trim() || "codex";
+  if (runnerName === "claude" && claudeSensitiveFallback && claudeSensitiveFallback !== "claude") {
+    const ownership = Array.isArray(node?.ownership) ? node.ownership : [];
+    const touchesClaudeSensitive = ownership.some((p) => String(p || "").includes("/.claude/") || String(p || "").startsWith(".claude/"));
+    const fallbackRunner = config.runners?.[claudeSensitiveFallback];
+    if (touchesClaudeSensitive && fallbackRunner?.cmd) {
+      consoleUi.event("info", `runner override: claude -> ${claudeSensitiveFallback} (sensitive path)`);
+      runnerName = claudeSensitiveFallback;
+    }
+  }
+
+  const runner = config.runners?.[runnerName];
+  if (!runner?.cmd) {
+    await appendLine(errorsPath, `[${nowIso()}] missing runner for role=${role} runner=${runnerName}`);
+    node.status = "open";
+    node.lock = null;
+    await saveWorkgraph(paths.graphPath, graph);
+    return;
+  }
+
+  const packetPath = path.join(runDir, "packet.md");
+  const resultPath = path.join(runDir, "result.json");
+  const stdoutPath = path.join(runDir, "stdout.log");
+  const checkpointOutPath = path.join(paths.checkpointsDir, `checkpoint-${run}.json`);
+
+  const templateName = role === "finalVerifier" ? "final-verifier" : role;
+  const template = await resolveTemplate(rootDir, templateName);
+  const goalDraft = await readTextTruncated(paths.goalPath, 20_000);
+  const taskPlanPath = path.join(paths.memoryDir, "task_plan.md");
+  const findingsPath = path.join(paths.memoryDir, "findings.md");
+  const progressPath = path.join(paths.memoryDir, "progress.md");
+  const taskPlanDraft = await readTextTruncated(taskPlanPath, 20_000);
+  const findingsDraft = await readTextTruncated(findingsPath, 20_000);
+  const progressDraft = await readTextTruncated(progressPath, 20_000);
+  const nodeResume = formatNodeResume(node);
+  const packet = renderTemplate(template, {
+    REPO_ROOT: paths.rootDir,
+    GOAL_PATH: paths.goalPath,
+    RUN_ID: run,
+    GOAL_DRAFT: goalDraft,
+    TASK_PLAN_PATH: path.relative(paths.rootDir, taskPlanPath),
+    FINDINGS_PATH: path.relative(paths.rootDir, findingsPath),
+    PROGRESS_PATH: path.relative(paths.rootDir, progressPath),
+    TASK_PLAN_DRAFT: taskPlanDraft,
+    FINDINGS_DRAFT: findingsDraft,
+    PROGRESS_DRAFT: progressDraft,
+    NODE_RESUME: nodeResume,
+    NODE_ID: node.id,
+    NODE_TITLE: node.title || "",
+    NODE_TYPE: node.type || "",
+    NODE_ACCEPTANCE: formatBullets(Array.isArray(node.acceptance) ? node.acceptance : []),
+    NODE_VERIFY: formatBullets((Array.isArray(node.verify) ? node.verify : []).map((v) => (typeof v === "string" ? v : JSON.stringify(v)))),
+    NODE_OWNERSHIP: formatBullets(Array.isArray(node.ownership) ? node.ownership : []),
+    RESULT_PATH: resultPath,
+    CHECKPOINT_OUT_PATH: checkpointOutPath,
+  });
+  await writeFile(packetPath, packet, "utf8");
+
+  await appendLine(activityPath, `[${nowIso()}] spawn role=${role} runner=${runnerName} node=${node.id} run=${run}`);
+  consoleUi.event("spawn", `${role} runner=${runnerName} run=${run} node=${node.id}`);
+  if (node.title) consoleUi.detail(node.title);
+  consoleUi.detail(`log: ${stdoutPath}`);
+
+  if (abortSignal?.aborted) {
+    await appendLine(activityPath, `[${nowIso()}] cancelled node=${node.id} run=${run}`);
+    node.status = "open";
+    node.lock = null;
+    node.updatedAt = nowIso();
+    await saveWorkgraph(paths.graphPath, graph);
+    return;
+  }
+
+  const startedAtMs = Date.now();
+  if (live) consoleUi.writeLine(consoleUi.hr(`runner ${runnerName}`));
+  const spinner = !live ? consoleUi.spinnerStart(`${role} ${node.id}`) : null;
+  const runnerEnv = mergeEnv(resolveRunnerEnv({ runnerName, runner, cwd: paths.rootDir, paths }), identityEnv);
+  await ensureRunnerTmpDir(runnerEnv);
+  if (runnerName === "claude")
+    await ensureClaudeProjectTmpWritable({ cwd: paths.rootDir, ui: consoleUi, uid: spawnIdentity?.uid, gid: spawnIdentity?.gid });
+  const execRes = await runRunnerCommand({
+    cmd: runner.cmd,
+    packetPath,
+    cwd: paths.rootDir,
+    logPath: stdoutPath,
+    timeoutMs: Number(runner.timeoutMs ?? config?.supervisor?.runnerTimeoutMs ?? 0),
+    tee: Boolean(live),
+    teePrefix: live ? { stdout: consoleUi.c.gray("│") + " ", stderr: consoleUi.c.gray("│") + " " } : null,
+    abortSignal,
+    env: runnerEnv,
+    uid: spawnIdentity?.uid ?? null,
+    gid: spawnIdentity?.gid ?? null,
+  });
+  spinner?.stop?.();
+  if (live) consoleUi.writeLine(consoleUi.hr());
+  const duration = consoleUi.formatDuration(Date.now() - startedAtMs);
+
+  await appendLine(activityPath, `[${nowIso()}] exit code=${execRes.code} signal=${execRes.signal || ""} node=${node.id} run=${run}`);
+  consoleUi.event(
+    "exit",
+    `${role} node=${node.id} code=${execRes.code}${execRes.signal ? ` signal=${execRes.signal}` : ""}${duration ? ` (${duration})` : ""}`,
+  );
+
+  if (execRes.aborted || abortSignal?.aborted) {
+    await appendLine(activityPath, `[${nowIso()}] cancelled node=${node.id} run=${run}`);
+    node.status = "open";
+    node.lock = null;
+    node.updatedAt = nowIso();
+    await saveWorkgraph(paths.graphPath, graph);
+    return;
+  }
+
+  let result = await safeReadResult(resultPath);
+  if (!result) {
+    const stdoutText = await readTextTruncated(stdoutPath, 200_000);
+    const extracted = extractResultJson(stdoutText);
+    if (extracted) {
+      result = extracted;
+      await writeJsonAtomic(resultPath, result);
+    }
+  }
+  if (!result) {
+    await appendLine(errorsPath, `[${nowIso()}] missing/invalid result.json node=${node.id} run=${run} cmd=${execRes.cmd}`);
+    node.attempts += 1;
+    node.status = node.attempts >= (node.retryPolicy?.maxAttempts || 3) ? "failed" : "open";
+    node.lock = null;
+    node.updatedAt = nowIso();
+    await saveWorkgraph(paths.graphPath, graph);
+    return;
+  }
+
+  if (String(result?.status || "").toLowerCase() === "checkpoint") {
+    const checkpointExisting = await safeReadJson(checkpointOutPath);
+    if (!checkpointExisting) {
+      const checkpoint = buildCheckpointFromResult(result, run);
+      if (checkpoint) await writeJsonAtomic(checkpointOutPath, checkpoint);
+    }
+    const checkpoint = await safeReadJson(checkpointOutPath);
+    const question = String(checkpoint?.question || "").trim();
+    node.checkpoint = {
+      version: 1,
+      runId: run,
+      path: path.relative(paths.rootDir, checkpointOutPath),
+      question,
+      createdAt: nowIso(),
+      answeredAt: null,
+      answer: null,
+    };
+    consoleUi.event("checkpoint", `${node.id}${question ? ` — ${consoleUi.truncate(question, 160)}` : ""}`);
+    consoleUi.detail(`checkpoint: ${checkpointOutPath}`);
+  }
+
+  await applyResult({ graph, node, result, activityPath, errorsPath });
+  const resultStatus = String(result?.status || "").toLowerCase();
+  const nodeType = normalizeNodeType(node?.type);
+  if ((nodeType === "plan" || nodeType === "epic") && resultStatus === "success") {
+    const scaffold = ensurePlannerScaffolding({ graph, config });
+    if (scaffold.updated) {
+      if (scaffold.addedIds.length > 0) await appendLine(activityPath, `[${nowIso()}] plan-scaffold added: ${scaffold.addedIds.join(", ")}`);
+      consoleUi.event(
+        "info",
+        `Planner scaffolding ${scaffold.addedIds.length > 0 ? `added ${scaffold.addedIds.length} node${scaffold.addedIds.length === 1 ? "" : "s"}` : "updated deps"}.`,
+      );
+    }
+  }
+  await saveWorkgraph(paths.graphPath, graph);
+  await appendProgress({ paths, node, run, role, runnerName, result, stdoutPath });
+  await syncTaskPlan({ paths, graph });
+
+  const finalStatus = String(result?.status || "").toLowerCase();
+  const summary = consoleUi.truncate(result?.summary || "", 180);
+  if (finalStatus === "success") {
+    consoleUi.event("done", `${node.id}${duration ? ` (${duration})` : ""}${summary ? ` — ${summary}` : ""}`);
+  } else if (finalStatus !== "checkpoint") {
+    consoleUi.event("fail", `${node.id}${duration ? ` (${duration})` : ""}${summary ? ` — ${summary}` : ""}`);
+  }
+}
+
+function formatNodeResume(node) {
+  const cp = node?.checkpoint && typeof node.checkpoint === "object" ? node.checkpoint : null;
+  const question = String(cp?.question || "").trim();
+  const answer = String(cp?.answer || "").trim();
+  const responsePath = String(cp?.responsePath || "").trim();
+  const askedRunId = String(cp?.runId || "").trim();
+  const askedPath = String(cp?.path || "").trim();
+  if (!question && !answer && !askedRunId && !askedPath) return "- (none)";
+  const lines = [];
+  if (askedRunId) lines.push(`- checkpoint run: ${askedRunId}`);
+  if (askedPath) lines.push(`- checkpoint file: ${askedPath}`);
+  if (question) lines.push(`- question: ${question}`);
+  if (answer) lines.push(`- answer: ${answer}`);
+  if (responsePath) lines.push(`- response file: ${responsePath}`);
+  return lines.join("\n");
+}
+
+function stableCountsSig(counts) {
+  const keys = Object.keys(counts || {}).sort();
+  return keys.map((k) => `${k}:${counts[k]}`).join("|");
+}
+
+function normalizeNodeType(value) {
+  return String(value || "").toLowerCase().trim();
+}
+
+function sanitizeNodeIdPart(value) {
+  const s = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return s || "x";
+}
+
+function ensureUniqueNodeId(base, existingIds) {
+  const baseId = String(base || "").trim();
+  if (!baseId) return "";
+  if (!existingIds.has(baseId)) return baseId;
+  for (let i = 1; i < 10_000; i += 1) {
+    const candidate = `${baseId}-${i}`;
+    if (!existingIds.has(candidate)) return candidate;
+  }
+  return `${baseId}-${Date.now()}`;
+}
+
+function listTaskNodes(graph) {
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  return nodes.filter((n) => normalizeNodeType(n?.type) === "task");
+}
+
+function listVerifyNodes(graph) {
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  return nodes.filter((n) => normalizeNodeType(n?.type) === "verify");
+}
+
+function listIntegrateNodes(graph) {
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  return nodes.filter((n) => normalizeNodeType(n?.type) === "integrate");
+}
+
+function listFinalVerifyNodes(graph) {
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  return nodes.filter((n) => {
+    const t = normalizeNodeType(n?.type);
+    return t === "final_verify" || t === "final-verify";
+  });
+}
+
+function unionOwnership(nodes) {
+  const out = [];
+  const seen = new Set();
+  for (const node of nodes) {
+    const ownership = Array.isArray(node?.ownership) ? node.ownership : [];
+    for (const item of ownership) {
+      const v = String(item || "").trim();
+      if (!v) continue;
+      if (seen.has(v)) continue;
+      seen.add(v);
+      out.push(v);
+    }
+  }
+  return out;
+}
+
+function ensurePlannerScaffolding({ graph, config }) {
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  const ids = new Set(nodes.map((n) => n.id).filter(Boolean));
+  const now = nowIso();
+  const addedIds = [];
+  let updated = false;
+
+  const tasks = listTaskNodes(graph);
+  if (tasks.length === 0) return { addedIds, updated };
+  const verifyNodes = listVerifyNodes(graph);
+
+  const verifierRunners = [...new Set(normalizeRunnerList(config?.roles?.verifier ?? config?.roles?.main ?? []))];
+  const multiVerifier = String(config?.supervisor?.multiVerifier || "one").toLowerCase().trim() === "all";
+
+  for (const task of tasks) {
+    if (!task?.id) continue;
+    const existing = verifyNodes.filter((v) => Array.isArray(v?.dependsOn) && v.dependsOn.includes(task.id));
+
+    if (multiVerifier && verifierRunners.length > 0) {
+      for (const runnerName of verifierRunners) {
+        const hasRunner = existing.some((v) => String(v?.runner || "").trim() === runnerName);
+        if (hasRunner) continue;
+
+        const baseId = `verify-${task.id}-${sanitizeNodeIdPart(runnerName)}`;
+        const id = ensureUniqueNodeId(baseId, ids);
+        ids.add(id);
+
+        nodes.push({
+          id,
+          title: `Verify (${runnerName}): ${task.title || task.id}`,
+          type: "verify",
+          status: "open",
+          dependsOn: [task.id],
+          runner: runnerName,
+          ownership: Array.isArray(task.ownership) ? task.ownership : [],
+          acceptance: Array.isArray(task.acceptance) ? task.acceptance : [],
+          verify: Array.isArray(task.verify) ? task.verify : [],
+          attempts: 0,
+          retryPolicy: { maxAttempts: 2 },
+          createdAt: now,
+          updatedAt: now,
+        });
+        addedIds.push(id);
+        updated = true;
+      }
+      continue;
+    }
+
+    if (existing.length > 0) continue;
+    const baseId = `verify-${task.id}`;
+    const id = ensureUniqueNodeId(baseId, ids);
+    ids.add(id);
+
+    nodes.push({
+      id,
+      title: `Verify: ${task.title || task.id}`,
+      type: "verify",
+      status: "open",
+      dependsOn: [task.id],
+      ownership: Array.isArray(task.ownership) ? task.ownership : [],
+      acceptance: Array.isArray(task.acceptance) ? task.acceptance : [],
+      verify: Array.isArray(task.verify) ? task.verify : [],
+      attempts: 0,
+      retryPolicy: { maxAttempts: 2 },
+      createdAt: now,
+      updatedAt: now,
+    });
+    addedIds.push(id);
+    updated = true;
+  }
+
+  const integrates = listIntegrateNodes(graph);
+  const integrateNode = integrates[0] || null;
+  let integrateId = integrateNode?.id || "";
+  if (!integrateId) {
+    const verifyIds = listVerifyNodes(graph)
+      .filter((n) => Array.isArray(n?.dependsOn) && n.dependsOn.some((d) => tasks.some((t) => t.id === d)))
+      .map((n) => n.id)
+      .filter(Boolean);
+    const deps = verifyIds.length > 0 ? verifyIds : tasks.map((t) => t.id).filter(Boolean);
+    const id = ensureUniqueNodeId("integrate-000", ids);
+    ids.add(id);
+    integrateId = id;
+
+    nodes.push({
+      id,
+      title: "Integrate changes and resolve cross-cutting issues",
+      type: "integrate",
+      status: "open",
+      dependsOn: deps,
+      ownership: unionOwnership(tasks),
+      acceptance: ["Integrates changes and ensures the repo is in a consistent, buildable state"],
+      verify: [],
+      attempts: 0,
+      retryPolicy: { maxAttempts: 2 },
+      createdAt: now,
+      updatedAt: now,
+    });
+    addedIds.push(id);
+    updated = true;
+  } else if (normalizeStatus(integrateNode?.status) === "open") {
+    const verifyIds = listVerifyNodes(graph)
+      .filter((n) => Array.isArray(n?.dependsOn) && n.dependsOn.some((d) => tasks.some((t) => t.id === d)))
+      .map((n) => n.id)
+      .filter(Boolean);
+    const deps = verifyIds.length > 0 ? verifyIds : tasks.map((t) => t.id).filter(Boolean);
+    const currentDeps = Array.isArray(integrateNode?.dependsOn) ? integrateNode.dependsOn.map(String) : [];
+    const desiredSig = deps.slice().sort().join("|");
+    const currentSig = currentDeps.slice().sort().join("|");
+    if (desiredSig !== currentSig) {
+      integrateNode.dependsOn = deps;
+      integrateNode.updatedAt = now;
+      updated = true;
+    }
+  }
+
+  const finals = listFinalVerifyNodes(graph);
+  if (finals.length === 0) {
+    const id = ensureUniqueNodeId("final-verify-000", ids);
+    ids.add(id);
+    nodes.push({
+      id,
+      title: "Final verification against GOAL.md",
+      type: "final_verify",
+      status: "open",
+      dependsOn: integrateId ? [integrateId] : [],
+      ownership: [],
+      acceptance: ["All work is complete and verified against GOAL.md"],
+      verify: [],
+      attempts: 0,
+      retryPolicy: { maxAttempts: 1 },
+      createdAt: now,
+      updatedAt: now,
+    });
+    addedIds.push(id);
+    updated = true;
+  }
+
+  if (updated) graph.nodes = nodes;
+  return { addedIds, updated };
+}
+
+async function safeReadResult(resultPath) {
+  try {
+    return await readJson(resultPath);
+  } catch {
+    return null;
+  }
+}
+
+async function applyResult({ graph, node, result, activityPath, errorsPath }) {
+  const status = String(result?.status || "").toLowerCase();
+  if (status === "success") {
+    node.status = "done";
+    node.lock = null;
+    node.completedAt = nowIso();
+    await appendLine(activityPath, `[${nowIso()}] done node=${node.id}`);
+  } else if (status === "checkpoint") {
+    node.status = "needs_human";
+    node.lock = null;
+    await appendLine(activityPath, `[${nowIso()}] checkpoint node=${node.id}`);
+  } else {
+    node.attempts = Number(node.attempts || 0) + 1;
+    const maxAttempts = node.retryPolicy?.maxAttempts || 3;
+    node.status = node.attempts >= maxAttempts ? "failed" : "open";
+    node.lock = null;
+    await appendLine(errorsPath, `[${nowIso()}] fail node=${node.id} attempts=${node.attempts}/${maxAttempts}`);
+  }
+
+  const addNodes = result?.next?.addNodes;
+  if (Array.isArray(addNodes) && addNodes.length > 0) {
+    const existing = new Set(graph.nodes.map((n) => n.id));
+    for (const n of addNodes) {
+      if (!n || typeof n !== "object") continue;
+      if (!n.id || typeof n.id !== "string") continue;
+      if (existing.has(n.id)) continue;
+      n.status = n.status || "open";
+      n.createdAt = n.createdAt || nowIso();
+      graph.nodes.push(n);
+      existing.add(n.id);
+    }
+  }
+}
+
+function sleep(ms, abortSignal) {
+  const n = Number(ms);
+  const duration = Number.isFinite(n) && n >= 0 ? n : 0;
+  if (!abortSignal) return new Promise((resolve) => setTimeout(resolve, duration));
+  if (abortSignal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const onAbort = () => {
+      clearTimeout(id);
+      resolve();
+    };
+    const id = setTimeout(() => {
+      abortSignal.removeEventListener("abort", onAbort);
+      resolve();
+    }, duration);
+    abortSignal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function installCancellation({ ui, label }) {
+  const controller = new AbortController();
+  let requested = false;
+
+  function exitCodeFor(sig) {
+    if (sig === "SIGINT") return 130;
+    if (sig === "SIGTERM") return 143;
+    return 1;
+  }
+
+  const handler = (sig) => {
+    const signalName = typeof sig === "string" ? sig : "SIGINT";
+    const code = exitCodeFor(signalName);
+    if (!requested) {
+      requested = true;
+      process.exitCode = process.exitCode || code;
+      ui?.event?.("warn", `Cancel requested (${signalName})${label ? ` [${label}]` : ""}. Press again to force.`);
+      controller.abort(signalName);
+      return;
+    }
+    ui?.event?.("warn", `Force exit (${signalName}).`);
+    process.exit(code);
+  };
+
+  process.on("SIGINT", handler);
+  process.on("SIGTERM", handler);
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      process.off("SIGINT", handler);
+      process.off("SIGTERM", handler);
+    },
+  };
+}
+
+export async function main(argv) {
+  const { command, positional, flags } = parseArgs(argv);
+  const rootDir = process.cwd();
+
+  if (!command || flags.h || flags.help) {
+    if (flags.h || flags.help || !process.stdin.isTTY || !process.stdout.isTTY) {
+      process.stdout.write(usage());
+      return;
+    }
+    await startCommand(rootDir, flags, []);
+    return;
+  }
+
+  if (command === "start") {
+    await startCommand(rootDir, flags, positional);
+    return;
+  }
+
+  if (command === "init") {
+    await initCommand(rootDir, flags);
+    return;
+  }
+
+  if (command === "status") {
+    await statusCommand(rootDir);
+    return;
+  }
+
+  if (command === "run") {
+    await runCommand(rootDir, flags);
+    return;
+  }
+
+  if (command === "resume") {
+    await runCommand(rootDir, flags);
+    return;
+  }
+
+  if (command === "goal") {
+    await goalCommand(rootDir, flags);
+    return;
+  }
+
+  if (command === "answer") {
+    await answerCommand(rootDir, flags);
+    return;
+  }
+
+  if (command === "stop") {
+    await stopCommand(rootDir, flags);
+    return;
+  }
+
+  if (command === "graph" && positional[0] === "validate") {
+    await graphValidateCommand(rootDir);
+    return;
+  }
+
+  // Shorthand: treat unknown command as an implicit goal string.
+  await startCommand(rootDir, flags, [command, ...positional]);
+}
+
+async function stopCommand(rootDir, flags) {
+  const paths = choreoPaths(rootDir);
+  const ui = createUi({ noColor: resolveNoColorFlag(flags), forceColor: resolveForceColorFlag(flags) });
+
+  const lock = await readSupervisorLock(paths.lockPath);
+  if (!lock) {
+    ui.event("warn", "No supervisor lock found.");
+    return;
+  }
+
+  const pid = Number(lock.pid);
+  const host = String(lock.host || "").trim();
+  if (!Number.isFinite(pid) || pid <= 0) {
+    ui.event("warn", `Invalid supervisor lock pid=${String(lock.pid)}.`);
+    return;
+  }
+  if (host && host !== os.hostname()) {
+    ui.event("warn", `Supervisor appears to be on host=${host}; refusing to signal from host=${os.hostname()}.`);
+    return;
+  }
+
+  const sigRaw = typeof flags.signal === "string" ? flags.signal : "SIGTERM";
+  const sig = String(sigRaw).trim().toUpperCase() || "SIGTERM";
+
+  try {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (error?.code === "ESRCH") {
+        await rm(paths.lockPath, { force: true });
+        ui.event("warn", `Supervisor pid=${pid} not found; cleared stale lock.`);
+        return;
+      }
+    }
+    process.kill(pid, sig);
+  } catch (error) {
+    ui.event("warn", `Failed to signal pid=${pid}: ${error?.message || String(error)}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  ui.event("done", `Sent ${sig} to supervisor pid=${pid}.`);
+}
+
+async function answerCommand(rootDir, flags) {
+  const paths = choreoPaths(rootDir);
+  const ui = createUi({ noColor: resolveNoColorFlag(flags), forceColor: resolveForceColorFlag(flags) });
+  const cancel = installCancellation({ ui, label: "answer" });
+  const abortSignal = cancel.signal;
+
+  try {
+    const graph = await loadWorkgraph(paths.graphPath);
+    if (!graph) throw new Error("Missing .choreo/workgraph.json. Run `choreo init`.");
+
+    const targetNodeId = typeof flags.node === "string" ? flags.node.trim() : "";
+    const checkpointFile = typeof flags.checkpoint === "string" ? flags.checkpoint.trim() : "";
+    const answerFlag = typeof flags.answer === "string" ? String(flags.answer) : "";
+    const canPrompt = isPromptEnabled();
+    const noPrompt = Boolean(flags["no-prompt"]) || Boolean(flags.noPrompt);
+
+    const needsHuman = (graph.nodes || []).filter((n) => String(n?.status || "").toLowerCase() === "needs_human");
+    if (needsHuman.length === 0 && !checkpointFile) {
+      ui.event("warn", "No nodes need human input.");
+      return;
+    }
+
+    let node = null;
+    if (targetNodeId) {
+      node = (graph.nodes || []).find((n) => n.id === targetNodeId) || null;
+      if (!node) throw new Error(`Unknown node id: ${targetNodeId}`);
+      if (String(node.status || "").toLowerCase() !== "needs_human") {
+        throw new Error(`Node is not waiting for human input: ${targetNodeId} (status=${node.status || "?"})`);
+      }
+    } else if (needsHuman.length === 1) {
+      node = needsHuman[0];
+    } else if (checkpointFile) {
+      // resolve by checkpoint mapping below
+      node = null;
+    } else {
+      if (!canPrompt || noPrompt) {
+        throw new Error(`Multiple nodes need human input; specify --node=<id>.\nNodes: ${needsHuman.map((n) => n.id).join(", ")}`);
+      }
+      ui.writeLine(ui.hr("needs human"));
+      for (let i = 0; i < needsHuman.length; i += 1) {
+        const n = needsHuman[i];
+        const q = n?.checkpoint?.question ? ui.truncate(n.checkpoint.question, 80) : "";
+        ui.writeLine(`${String(i + 1).padStart(2, " ")}. ${n.id}${q ? ` — ${q}` : ""}`);
+      }
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        const picked = (await rl.question("Pick a node number (or 'q'): ", { signal: abortSignal })).trim();
+        if (!picked || picked.toLowerCase() === "q") return;
+        const idx = Number(picked);
+        if (!Number.isFinite(idx) || idx < 1 || idx > needsHuman.length) throw new Error("Invalid selection.");
+        node = needsHuman[idx - 1];
+      } finally {
+        rl.close();
+      }
+    }
+
+    const { checkpointPathAbs, checkpoint, resolvedNodeId } = await resolveCheckpointForAnswer({
+      paths,
+      graph,
+      nodeId: node?.id || "",
+      checkpointFile,
+    });
+
+    if (!node && resolvedNodeId) {
+      node = (graph.nodes || []).find((n) => n.id === resolvedNodeId) || null;
+    }
+    if (!node) throw new Error("Could not resolve which node to answer. Use --node=<id>.");
+    if (String(node.status || "").toLowerCase() !== "needs_human") {
+      throw new Error(`Node is not waiting for human input: ${node.id} (status=${node.status || "?"})`);
+    }
+
+    const question = String(checkpoint?.question || "").trim();
+    const context = String(checkpoint?.context || "").trim();
+    const options = Array.isArray(checkpoint?.options) ? checkpoint.options.map((o) => String(o)) : [];
+    if (question) {
+      ui.writeLine(ui.hr(`checkpoint ${node.id}`));
+      ui.writeLine(question);
+      if (context) ui.writeLine(`\n${context}`);
+      if (options.length > 0) {
+        ui.writeLine("\nOptions:");
+        for (const opt of options) ui.writeLine(`- ${opt}`);
+      }
+      ui.detail(`checkpoint: ${path.relative(paths.rootDir, checkpointPathAbs)}`);
+      ui.writeLine(ui.hr());
+    }
+
+    let answer = answerFlag.trim();
+    if (!answer) {
+      if (!canPrompt || noPrompt) throw new Error("Missing answer. Provide --answer=\"...\" or run in a TTY.");
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        answer = (await rl.question("Your answer (or 'q'): ", { signal: abortSignal })).trim();
+      } finally {
+        rl.close();
+      }
+      if (!answer || answer.toLowerCase() === "q" || answer.toLowerCase() === "quit") return;
+    }
+
+    const checkpointId = String(checkpoint?.id || "").trim() || deriveCheckpointIdFromPath(checkpointPathAbs);
+    const responsePathAbs = path.join(paths.checkpointsDir, `response-${checkpointId}.json`);
+    await writeJsonAtomic(responsePathAbs, {
+      version: 1,
+      checkpointId,
+      nodeId: node.id,
+      answeredAt: nowIso(),
+      answer,
+    });
+
+    node.status = "open";
+    node.lock = null;
+    node.updatedAt = nowIso();
+    node.checkpoint = {
+      ...(typeof node.checkpoint === "object" && node.checkpoint ? node.checkpoint : {}),
+      version: 1,
+      runId: node?.checkpoint?.runId || null,
+      path: path.relative(paths.rootDir, checkpointPathAbs),
+      question: question || node?.checkpoint?.question || "",
+      answeredAt: nowIso(),
+      answer,
+      responsePath: path.relative(paths.rootDir, responsePathAbs),
+    };
+    await saveWorkgraph(paths.graphPath, graph);
+    await syncTaskPlan({ paths, graph });
+
+    const progressPath = path.join(paths.memoryDir, "progress.md");
+    const lines = [];
+    lines.push("");
+    lines.push(`## [${nowIso()}] Answered checkpoint for ${node.id}`);
+    if (question) lines.push(`- question: ${question}`);
+    lines.push(`- answer: ${answer}`);
+    lines.push(`- checkpoint: ${path.relative(paths.rootDir, checkpointPathAbs)}`);
+    lines.push(`- response: ${path.relative(paths.rootDir, responsePathAbs)}`);
+    await writeFile(progressPath, lines.join("\n") + "\n", { encoding: "utf8", flag: "a" });
+
+    ui.event("done", `Recorded answer and reopened ${node.id}.`);
+    ui.detail("Run `choreo run` (or keep the supervisor running) to continue.");
+  } finally {
+    cancel.cleanup();
+  }
+}
+
+function deriveCheckpointIdFromPath(checkpointPathAbs) {
+  const base = path.basename(String(checkpointPathAbs || ""));
+  if (base.startsWith("checkpoint-") && base.endsWith(".json")) return base.slice("checkpoint-".length, -".json".length);
+  return base.replace(/\.json$/i, "");
+}
+
+async function resolveCheckpointForAnswer({ paths, graph, nodeId, checkpointFile }) {
+  const explicit = checkpointFile ? checkpointFile : "";
+  if (explicit) {
+    const abs = path.isAbsolute(explicit) ? explicit : path.join(paths.checkpointsDir, explicit);
+    const checkpoint = await safeReadJson(abs);
+    if (!checkpoint) throw new Error(`Invalid checkpoint file: ${abs}`);
+    const runIdFromName = deriveCheckpointIdFromPath(abs);
+    let resolvedNodeId = "";
+    const runResultPath = path.join(paths.runsDir, runIdFromName, "result.json");
+    const runResult = await safeReadJson(runResultPath);
+    if (runResult?.nodeId) resolvedNodeId = String(runResult.nodeId);
+    return { checkpointPathAbs: abs, checkpoint, resolvedNodeId };
+  }
+
+  // Prefer node.checkpoint.path when present.
+  const node = (graph.nodes || []).find((n) => n.id === nodeId);
+  const candidateRel = typeof node?.checkpoint?.path === "string" ? node.checkpoint.path : "";
+  if (candidateRel) {
+    const abs = path.isAbsolute(candidateRel) ? candidateRel : path.join(paths.rootDir, candidateRel);
+    const checkpoint = await safeReadJson(abs);
+    if (checkpoint) return { checkpointPathAbs: abs, checkpoint, resolvedNodeId: nodeId };
+  }
+
+  // Fallback: scan checkpoint files and map runId -> nodeId via runs/<runId>/result.json.
+  const checkpointFiles = await listCheckpoints(paths.checkpointsDir);
+  const candidates = [];
+  for (const file of checkpointFiles) {
+    const runId = deriveCheckpointIdFromPath(file);
+    if (runId.startsWith("goal-")) continue;
+    const runResultPath = path.join(paths.runsDir, runId, "result.json");
+    const runResult = await safeReadJson(runResultPath);
+    const rid = String(runResult?.nodeId || "").trim();
+    if (!rid) continue;
+    if (rid !== nodeId) continue;
+    candidates.push({ runId, file });
+  }
+  candidates.sort((a, b) => String(a.runId).localeCompare(String(b.runId)));
+  const best = candidates[candidates.length - 1] || null;
+  if (!best) throw new Error(`Could not find checkpoint file for node ${nodeId}.`);
+  const abs = path.join(paths.checkpointsDir, best.file);
+  const checkpoint = await safeReadJson(abs);
+  if (!checkpoint) throw new Error(`Invalid checkpoint file: ${abs}`);
+  return { checkpointPathAbs: abs, checkpoint, resolvedNodeId: nodeId };
+}
+
+async function answerNeedsHumanInteractive({ paths, graph, ui, abortSignal }) {
+  const canPrompt = isPromptEnabled();
+  if (!canPrompt) return false;
+  if (abortSignal?.aborted) return false;
+  const needsHuman = (graph.nodes || []).filter((n) => String(n?.status || "").toLowerCase() === "needs_human");
+  if (needsHuman.length === 0) return false;
+
+  let node = null;
+  if (needsHuman.length === 1) {
+    node = needsHuman[0];
+  } else {
+    while (true) {
+      ui.writeLine(ui.hr("needs human"));
+      for (let i = 0; i < needsHuman.length; i += 1) {
+        const n = needsHuman[i];
+        const q = n?.checkpoint?.question ? ui.truncate(n.checkpoint.question, 80) : "";
+        ui.writeLine(`${String(i + 1).padStart(2, " ")}. ${n.id}${q ? ` — ${q}` : ""}`);
+      }
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        const picked = (await rl.question("Pick a node number to answer (or 'q' to quit): ", { signal: abortSignal }))
+          .trim()
+          .toLowerCase();
+        if (!picked || picked === "q" || picked === "quit") return false;
+        const idx = Number(picked);
+        if (!Number.isFinite(idx) || idx < 1 || idx > needsHuman.length) {
+          ui.event("warn", "Invalid selection.");
+          continue;
+        }
+        node = needsHuman[idx - 1];
+        break;
+      } finally {
+        rl.close();
+      }
+    }
+  }
+
+  const { checkpointPathAbs, checkpoint } = await resolveCheckpointForAnswer({ paths, graph, nodeId: node.id, checkpointFile: "" });
+  const question = String(checkpoint?.question || "").trim();
+  const context = String(checkpoint?.context || "").trim();
+  const options = Array.isArray(checkpoint?.options) ? checkpoint.options.map((o) => String(o)) : [];
+
+  ui.writeLine(ui.hr(`checkpoint ${node.id}`));
+  if (question) ui.writeLine(question);
+  if (context) ui.writeLine(`\n${context}`);
+  if (options.length > 0) {
+    ui.writeLine("\nOptions:");
+    for (const opt of options) ui.writeLine(`- ${opt}`);
+  }
+  ui.detail(`checkpoint: ${path.relative(paths.rootDir, checkpointPathAbs)}`);
+  ui.writeLine(ui.hr());
+
+  let answer = "";
+  while (true) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      answer = (await rl.question("Your answer (or 'q' to quit): ", { signal: abortSignal })).trim();
+    } finally {
+      rl.close();
+    }
+    if (!answer) {
+      ui.event("warn", "Answer was empty.");
+      continue;
+    }
+    if (answer.toLowerCase() === "q" || answer.toLowerCase() === "quit") return false;
+    break;
+  }
+
+  const checkpointId = String(checkpoint?.id || "").trim() || deriveCheckpointIdFromPath(checkpointPathAbs);
+  const responsePathAbs = path.join(paths.checkpointsDir, `response-${checkpointId}.json`);
+  await writeJsonAtomic(responsePathAbs, {
+    version: 1,
+    checkpointId,
+    nodeId: node.id,
+    answeredAt: nowIso(),
+    answer,
+  });
+
+  node.status = "open";
+  node.lock = null;
+  node.updatedAt = nowIso();
+  node.checkpoint = {
+    ...(typeof node.checkpoint === "object" && node.checkpoint ? node.checkpoint : {}),
+    version: 1,
+    runId: node?.checkpoint?.runId || null,
+    path: path.relative(paths.rootDir, checkpointPathAbs),
+    question: question || node?.checkpoint?.question || "",
+    answeredAt: nowIso(),
+    answer,
+    responsePath: path.relative(paths.rootDir, responsePathAbs),
+  };
+  await saveWorkgraph(paths.graphPath, graph);
+  await syncTaskPlan({ paths, graph });
+
+  const progressPath = path.join(paths.memoryDir, "progress.md");
+  const lines = [];
+  lines.push("");
+  lines.push(`## [${nowIso()}] Answered checkpoint for ${node.id}`);
+  if (question) lines.push(`- question: ${question}`);
+  lines.push(`- answer: ${answer}`);
+  lines.push(`- checkpoint: ${path.relative(paths.rootDir, checkpointPathAbs)}`);
+  lines.push(`- response: ${path.relative(paths.rootDir, responsePathAbs)}`);
+  await writeFile(progressPath, lines.join("\n") + "\n", { encoding: "utf8", flag: "a" });
+
+  ui.event("done", `Reopened ${node.id}. Continuing...`);
+  return true;
+}
+
+function defaultFindingsMarkdown() {
+  return (
+    "# Findings & Decisions\n" +
+    "\n" +
+    "Use this file to persist discoveries, links, and technical decisions across agents.\n" +
+    "\n" +
+    "## Requirements\n" +
+    "-\n" +
+    "\n" +
+    "## Research Findings\n" +
+    "-\n" +
+    "\n" +
+    "## Technical Decisions\n" +
+    "| Decision | Rationale |\n" +
+    "|----------|-----------|\n" +
+    "|          |           |\n" +
+    "\n" +
+    "## Resources\n" +
+    "-\n"
+  );
+}
+
+function defaultTaskPlanMarkdown() {
+  return (
+    "# Task Plan\n" +
+    "\n" +
+    "This file is shared working memory for all agents.\n" +
+    "\n" +
+    "## Goal\n" +
+    "See `GOAL.md`.\n" +
+    "\n" +
+    "## Workgraph (auto)\n" +
+    "<!-- CHOREO:BEGIN_WORKGRAPH -->\n" +
+    "- (pending)\n" +
+    "<!-- CHOREO:END_WORKGRAPH -->\n" +
+    "\n" +
+    "## Notes\n" +
+    "-\n"
+  );
+}
+
+async function syncTaskPlan({ paths, graph }) {
+  const taskPlanPath = path.join(paths.memoryDir, "task_plan.md");
+  const start = "<!-- CHOREO:BEGIN_WORKGRAPH -->";
+  const end = "<!-- CHOREO:END_WORKGRAPH -->";
+
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  const lines = [];
+  for (const node of nodes) {
+    const status = String(node?.status || "").toLowerCase();
+    const box = status === "done" ? "x" : " ";
+    const extra =
+      status === "in_progress"
+        ? " **Status:** in_progress"
+        : status === "needs_human"
+          ? " **Status:** needs_human"
+          : status === "failed"
+            ? " **Status:** failed"
+            : "";
+    lines.push(`- [${box}] ${node.id} — ${node.title || "(untitled)"}${extra}`);
+  }
+  const replacement = lines.length ? lines.join("\n") : "- (no nodes)";
+
+  let current = "";
+  try {
+    current = await readFile(taskPlanPath, "utf8");
+  } catch {
+    current = defaultTaskPlanMarkdown();
+  }
+
+  const startIdx = current.indexOf(start);
+  const endIdx = current.indexOf(end);
+  let out = current;
+  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+    const before = current.slice(0, startIdx + start.length);
+    const after = current.slice(endIdx);
+    out = `${before}\n${replacement}\n${after}`;
+  } else {
+    out = current.trimEnd() + `\n\n## Workgraph (auto)\n${start}\n${replacement}\n${end}\n`;
+  }
+
+  await writeFile(taskPlanPath, out.endsWith("\n") ? out : out + "\n", "utf8");
+}
+
+async function appendProgress({ paths, node, run, role, runnerName, result, stdoutPath }) {
+  const progressPath = path.join(paths.memoryDir, "progress.md");
+  const status = String(result?.status || "").toLowerCase();
+  const summary = String(result?.summary || "").trim();
+
+  const lines = [];
+  lines.push("");
+  lines.push(`## [${nowIso()}] ${node.id} (${role}) — ${status}`);
+  lines.push(`- runner: ${runnerName}`);
+  lines.push(`- run: ${run}`);
+  lines.push(`- log: ${stdoutPath}`);
+  if (summary) lines.push(`- summary: ${summary}`);
+  await writeFile(progressPath, lines.join("\n") + "\n", { encoding: "utf8", flag: "a" });
+}

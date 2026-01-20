@@ -1,0 +1,16 @@
+{
+  "name": "choreo",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Goal-driven multi-agent orchestration CLI for coding agents (Codex, Claude Code, Gemini).",
+  "type": "module",
+  "bin": {
+    "choreo": "bin/choreo.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
