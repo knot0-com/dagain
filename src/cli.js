@@ -50,6 +50,7 @@ Usage:
 	  choreo kv put [--run] [--node=<id>] --key=<k> --value="..." [--allow-cross-node-write]
 	  choreo kv ls [--run] [--node=<id>] [--prefix=<p>] [--json]
   choreo microcall --prompt="..." [--runner=<name>] [--role=<role>] [--store-key=<k>] [--run] [--json]
+  choreo templates sync [--force]
   choreo stop [--signal=<sig>]
   choreo graph validate
 
@@ -3295,6 +3296,11 @@ export async function main(argv) {
     return;
   }
 
+  if (command === "templates" && positional[0] === "sync") {
+    await templatesSyncCommand(rootDir, flags);
+    return;
+  }
+
   if (command === "stop") {
     await stopCommand(rootDir, flags);
     return;
@@ -3351,6 +3357,14 @@ async function stopCommand(rootDir, flags) {
   }
 
   ui.event("done", `Sent ${sig} to supervisor pid=${pid}.`);
+}
+
+async function templatesSyncCommand(rootDir, flags) {
+  const paths = choreoPaths(rootDir);
+  if (!(await pathExists(paths.choreoDir))) throw new Error("Missing .choreo directory. Run `choreo init` first.");
+  const force = Boolean(flags.force);
+  await copyTemplates(rootDir, { force });
+  process.stdout.write(`Templates synced${force ? " (force)" : ""}.\n`);
 }
 
 async function answerCommand(rootDir, flags) {
