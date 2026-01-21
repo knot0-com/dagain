@@ -52,7 +52,12 @@ export async function selectNextRunnableNode({ dbPath, nowIso }) {
       `    SELECT 1\n` +
       `    FROM deps d\n` +
       `    JOIN nodes dep ON dep.id = d.depends_on_id\n` +
-      `    WHERE d.node_id = n.id AND dep.status <> 'done'\n` +
+      `    WHERE d.node_id = n.id AND (\n` +
+      `      CASE COALESCE(NULLIF(lower(d.required_status), ''), 'done')\n` +
+      `        WHEN 'terminal' THEN dep.status NOT IN ('done', 'failed')\n` +
+      `        ELSE dep.status <> 'done'\n` +
+      `      END\n` +
+      `    )\n` +
       `  )\n` +
       `ORDER BY\n` +
       `  CASE lower(n.type)\n` +
@@ -198,7 +203,9 @@ export async function listFailedDepsBlockingOpenNodes({ dbPath }) {
       `FROM nodes n\n` +
       `JOIN deps d ON d.node_id = n.id\n` +
       `JOIN nodes dep ON dep.id = d.depends_on_id\n` +
-      `WHERE n.status='open' AND dep.status='failed'\n` +
+      `WHERE n.status='open'\n` +
+      `  AND dep.status='failed'\n` +
+      `  AND COALESCE(NULLIF(lower(d.required_status), ''), 'done') = 'done'\n` +
       `ORDER BY dep.id;\n`,
   );
   return rows.map((r) => r.id).filter(Boolean);
@@ -355,7 +362,8 @@ export async function applyResult({ dbPath, nodeId, runId, result, nowIso }) {
         `  ${sqlQuote(inputsJson)},\n` +
         `  ${sqlQuote(now)}, ${sqlQuote(now)}\n` +
         `);\n` +
-        `INSERT OR IGNORE INTO deps(node_id, depends_on_id) VALUES(${sqlQuote(escalationId)}, ${sqlQuote(nodeId)});\n`,
+        `INSERT OR IGNORE INTO deps(node_id, depends_on_id, required_status)\n` +
+        `VALUES(${sqlQuote(escalationId)}, ${sqlQuote(nodeId)}, 'terminal');\n`,
     );
   }
 }

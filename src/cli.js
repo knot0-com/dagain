@@ -18,6 +18,7 @@ import { createUi } from "./lib/ui.js";
 import { sqliteExec, sqliteQueryJson } from "./lib/db/sqlite3.js";
 import { exportWorkgraphJson, loadWorkgraphFromDb } from "./lib/db/export.js";
 import { kvGet, kvList, kvPut } from "./lib/db/kv.js";
+import { ensureDepsRequiredStatusColumn } from "./lib/db/migrate.js";
 import {
   allDoneDb,
   applyResult as applyResultDb,
@@ -517,6 +518,7 @@ async function initCommand(rootDir, flags) {
   const schemaUrl = new URL("./lib/db/schema.sql", import.meta.url);
   const schemaSql = await readFile(schemaUrl, "utf8");
   await sqliteExec(paths.dbPath, schemaSql);
+  await ensureDepsRequiredStatusColumn({ dbPath: paths.dbPath });
   const now = nowIso();
   const nowSql = `'${now.replace(/'/g, "''")}'`;
   await sqliteExec(
@@ -1197,6 +1199,7 @@ async function runCommand(rootDir, flags) {
   const config = await loadConfig(paths.configPath);
   if (!config) throw new Error("Missing .choreo/config.json. Run `choreo init`.");
   if (!(await pathExists(paths.dbPath))) throw new Error("Missing .choreo/state.sqlite. Run `choreo init`.");
+  await ensureDepsRequiredStatusColumn({ dbPath: paths.dbPath });
   const initGraph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
   if (!Array.isArray(initGraph.nodes) || initGraph.nodes.length === 0) {
     process.stderr.write("No nodes in .choreo/state.sqlite. Run `choreo start` (or `choreo init --force`) to seed a plan node.\n");

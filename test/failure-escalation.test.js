@@ -7,7 +7,7 @@ import { mkdtemp } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { sqliteExec, sqliteJson } from "./helpers/sqlite.js";
-import { applyResult } from "../src/lib/db/nodes.js";
+import { applyResult, selectNextRunnableNode } from "../src/lib/db/nodes.js";
 
 function runCli({ binPath, cwd, args }) {
   return new Promise((resolve, reject) => {
@@ -75,10 +75,17 @@ test("applyResult: permanent failure creates escalation node once", async () => 
   assert.equal(escalation[0]?.type, "plan");
   assert.equal(escalation[0]?.status, "open");
 
-  const deps = await sqliteJson(dbPath, "SELECT node_id, depends_on_id FROM deps WHERE node_id='plan-escalate-a' AND depends_on_id='a';");
+  const deps = await sqliteJson(
+    dbPath,
+    "SELECT node_id, depends_on_id, required_status FROM deps WHERE node_id='plan-escalate-a' AND depends_on_id='a';",
+  );
   assert.equal(deps.length, 1);
+  assert.equal(deps[0]?.required_status, "terminal");
 
   const count = await sqliteJson(dbPath, "SELECT COUNT(*) AS n FROM nodes WHERE id='plan-escalate-a';");
   assert.equal(Number(count[0]?.n ?? 0), 1);
-});
 
+  const next = await selectNextRunnableNode({ dbPath, nowIso: new Date().toISOString() });
+  assert.ok(next, "expected a runnable node");
+  assert.equal(next.id, "plan-escalate-a");
+});

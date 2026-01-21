@@ -49,6 +49,7 @@ CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_id);
 CREATE TABLE IF NOT EXISTS deps (
   node_id TEXT NOT NULL,
   depends_on_id TEXT NOT NULL,
+  required_status TEXT NOT NULL DEFAULT 'done',
   PRIMARY KEY(node_id, depends_on_id),
   FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE,
   FOREIGN KEY(depends_on_id) REFERENCES nodes(id) ON DELETE CASCADE
