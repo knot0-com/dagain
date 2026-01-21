@@ -11,7 +11,7 @@ function readAll(stream) {
 }
 
 export async function sqliteExec(dbPath, sql) {
-  const args = ["-bail", dbPath];
+  const args = ["-bail", "-cmd", ".timeout 5000", dbPath];
   const child = spawn("sqlite3", args, { stdio: ["pipe", "pipe", "pipe"] });
   const stdoutP = readAll(child.stdout);
   const stderrP = readAll(child.stderr);
@@ -29,7 +29,9 @@ export async function sqliteExec(dbPath, sql) {
 
 export async function sqliteQueryJson(dbPath, sql) {
   return new Promise((resolve, reject) => {
-    const child = spawn("sqlite3", ["-bail", "-json", dbPath, String(sql || "")], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("sqlite3", ["-bail", "-cmd", ".timeout 5000", "-json", dbPath, String(sql || "")], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let out = "";
     let err = "";
     child.stdout.setEncoding("utf8");
@@ -43,4 +45,3 @@ export async function sqliteQueryJson(dbPath, sql) {
     });
   });
 }
-
