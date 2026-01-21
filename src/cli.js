@@ -1880,13 +1880,18 @@ async function executeNode({ rootDir, paths, config, node, run, activityPath, er
 
   const templateName = role === "finalVerifier" ? "final-verifier" : role;
   const template = await resolveTemplate(rootDir, templateName);
-  const goalDraft = await readTextTruncated(paths.goalPath, 20_000);
+  const packetMode = String(config?.supervisor?.packetMode || "full").toLowerCase().trim() || "full";
+  const thinPacket = packetMode === "thin";
+  const includePlanningDrafts = !thinPacket || role === "planner" || role === "finalVerifier";
+
+  const goalDraftMax = thinPacket && role !== "planner" && role !== "finalVerifier" ? 4_000 : 20_000;
+  const goalDraft = await readTextTruncated(paths.goalPath, goalDraftMax);
   const taskPlanPath = path.join(paths.memoryDir, "task_plan.md");
   const findingsPath = path.join(paths.memoryDir, "findings.md");
   const progressPath = path.join(paths.memoryDir, "progress.md");
-  const taskPlanDraft = await readTextTruncated(taskPlanPath, 20_000);
-  const findingsDraft = await readTextTruncated(findingsPath, 20_000);
-  const progressDraft = await readTextTruncated(progressPath, 20_000);
+  const taskPlanDraft = includePlanningDrafts ? await readTextTruncated(taskPlanPath, 20_000) : "";
+  const findingsDraft = includePlanningDrafts ? await readTextTruncated(findingsPath, 20_000) : "";
+  const progressDraft = includePlanningDrafts ? await readTextTruncated(progressPath, 20_000) : "";
   const nodeResume = formatNodeResume(node);
   const packet = renderTemplate(template, {
     REPO_ROOT: paths.rootDir,
