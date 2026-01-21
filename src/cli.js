@@ -1365,6 +1365,7 @@ async function runCommand(rootDir, flags) {
               ui,
               abortSignal,
               serial,
+              multiWorker: true,
             }),
           )
           .catch(async (error) => {
@@ -2124,7 +2125,20 @@ function clearStaleLocks(graph, staleSeconds) {
   return changed;
 }
 
-async function executeNode({ rootDir, paths, config, node, run, activityPath, errorsPath, live = false, ui, abortSignal = null, serial = null }) {
+async function executeNode({
+  rootDir,
+  paths,
+  config,
+  node,
+  run,
+  activityPath,
+  errorsPath,
+  live = false,
+  ui,
+  abortSignal = null,
+  serial = null,
+  multiWorker = false,
+}) {
   const consoleUi = ui || createUi({ noColor: false });
   const spawnIdentity = await resolveSpawnIdentity({ rootDir: paths.rootDir });
   const identityEnv = envForIdentity(spawnIdentity);
@@ -2242,7 +2256,8 @@ async function executeNode({ rootDir, paths, config, node, run, activityPath, er
 
   const startedAtMs = Date.now();
   if (live) consoleUi.writeLine(consoleUi.hr(`runner ${runnerName}`));
-  const spinner = !live ? consoleUi.spinnerStart(`${role} ${node.id}`) : null;
+  const spinner = !live && !multiWorker ? consoleUi.spinnerStart(`${role} ${node.id}`) : null;
+  const liveLinePrefix = consoleUi.c.gray(multiWorker ? `│${node.id}│` : "│") + " ";
   const runnerEnv = mergeEnv(
     mergeEnv(resolveRunnerEnv({ runnerName, runner, cwd: paths.rootDir, paths }), identityEnv),
     choreoRunnerEnv(paths, { nodeId: node.id, runId: run }),
@@ -2257,7 +2272,7 @@ async function executeNode({ rootDir, paths, config, node, run, activityPath, er
     logPath: stdoutPath,
     timeoutMs: Number(runner.timeoutMs ?? config?.supervisor?.runnerTimeoutMs ?? 0),
     tee: Boolean(live),
-    teePrefix: live ? { stdout: consoleUi.c.gray("│") + " ", stderr: consoleUi.c.gray("│") + " " } : null,
+    teePrefix: live ? { stdout: liveLinePrefix, stderr: liveLinePrefix } : null,
     abortSignal,
     env: runnerEnv,
     uid: spawnIdentity?.uid ?? null,
