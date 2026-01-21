@@ -13,6 +13,7 @@ import { defaultWorkgraph, loadWorkgraph, saveWorkgraph, countByStatus } from ".
 import { selectNextNode } from "./lib/select.js";
 import { formatBullets, renderTemplate } from "./lib/template.js";
 import { normalizeRunnerList, resolveNodeRole, resolveRoleRunnerPick, runRunnerCommand } from "./lib/runner.js";
+import { OwnershipLockManager } from "./lib/ownership-locks.js";
 import { acquireSupervisorLock, heartbeatSupervisorLock, readSupervisorLock, releaseSupervisorLock } from "./lib/lock.js";
 import { createUi } from "./lib/ui.js";
 import { sqliteExec, sqliteQueryJson } from "./lib/db/sqlite3.js";
@@ -22,14 +23,15 @@ import { ensureDepsRequiredStatusColumn } from "./lib/db/migrate.js";
 import {
   allDoneDb,
   applyResult as applyResultDb,
-  claimNode,
-  countByStatusDb,
-  getNode,
-  listFailedDepsBlockingOpenNodes,
-  listNodes,
-  selectNextRunnableNode,
-  unlockNode as unlockNodeDb,
-} from "./lib/db/nodes.js";
+	  claimNode,
+	  countByStatusDb,
+	  getNode,
+	  listFailedDepsBlockingOpenNodes,
+	  listNodes,
+	  selectRunnableCandidates,
+	  selectNextRunnableNode,
+	  unlockNode as unlockNodeDb,
+	} from "./lib/db/nodes.js";
 
 function usage() {
   return `choreo
@@ -1246,6 +1248,11 @@ async function runCommand(rootDir, flags) {
   const autoResetFailedMaxNum = Number(autoResetFailedMaxRaw);
   const autoResetFailedMax = Number.isFinite(autoResetFailedMaxNum) && autoResetFailedMaxNum >= 0 ? autoResetFailedMaxNum : 1;
 
+  const workersRaw = flags.workers ?? config.supervisor?.workers ?? 1;
+  const workersNum = Number(workersRaw);
+  const requestedWorkers = Number.isFinite(workersNum) && workersNum > 0 ? Math.floor(workersNum) : 1;
+  const workers = dryRun || once ? 1 : requestedWorkers;
+
   const activityPath = path.join(paths.memoryDir, "activity.log");
   const errorsPath = path.join(paths.memoryDir, "errors.log");
 
@@ -1253,6 +1260,7 @@ async function runCommand(rootDir, flags) {
   ui.detail(`root: ${paths.rootDir}`);
   ui.detail(`goal: ${path.relative(paths.rootDir, paths.goalPath) || "GOAL.md"}`);
   ui.detail(`state: ${path.relative(paths.rootDir, paths.choreoDir) || ".choreo"}`);
+  if (workers > 1) ui.detail(`workers: ${workers}`);
   ui.writeLine(ui.hr());
 
   let acquired = false;
@@ -1333,6 +1341,293 @@ async function runCommand(rootDir, flags) {
   let lastCountsSig = "";
   // eslint-disable-next-line no-constant-condition
   try {
+    async function runParallelSupervisor() {
+      const serial = createSerialQueue();
+      const locks = new OwnershipLockManager();
+      const inFlight = new Map();
+
+      const maxWorkerCount = workers;
+      const candidateLimit = Math.max(50, maxWorkerCount * 10);
+
+      const spawnWorker = async (node) => {
+        const run = runId();
+        const promise = Promise.resolve()
+          .then(() =>
+            executeNode({
+              rootDir,
+              paths,
+              config,
+              node,
+              run,
+              activityPath,
+              errorsPath,
+              live,
+              ui,
+              abortSignal,
+              serial,
+            }),
+          )
+          .catch(async (error) => {
+            const message = error?.message || String(error);
+            await appendLine(errorsPath, `[${nowIso()}] worker error node=${node.id} run=${run} ${message}`);
+            try {
+              const unlock = async () => {
+                await unlockNodeDb({ dbPath: paths.dbPath, nodeId: node.id, status: "open", nowIso: nowIso() });
+                const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+                await syncTaskPlan({ paths, graph });
+              };
+              await serial.enqueue(unlock);
+            } catch {
+              // ignore
+            }
+          })
+          .finally(async () => {
+            inFlight.delete(node.id);
+            locks.release(node.id);
+            await serial.enqueue(async () => repairChoreoStateOwnership({ paths, ui }));
+          });
+
+        inFlight.set(node.id, promise);
+        locks.acquire(node.id, { resources: locks.normalizeResources(node.ownership), mode: locks.modeForRole(resolveNodeRole(node)) });
+        return promise;
+      };
+
+      while (true) {
+        iter += 1;
+        if (abortSignal.aborted) {
+          await appendLine(activityPath, `[${nowIso()}] supervisor-cancel pid=${process.pid}`);
+          await Promise.allSettled([...inFlight.values()]);
+          return;
+        }
+        if (maxIterations > 0 && iter > maxIterations) {
+          process.stdout.write(`Reached max iterations (${maxIterations}).\n`);
+          await Promise.allSettled([...inFlight.values()]);
+          return;
+        }
+
+        const nowMs = Date.now();
+        if (nowMs - lastHeartbeatMs > 1000) {
+          lastHeartbeatMs = nowMs;
+          try {
+            await heartbeatSupervisorLock(paths.lockPath);
+          } catch {
+            // ignore
+          }
+        }
+
+        const staleUnlocked = await clearStaleLocksDb({ paths, staleLockSeconds });
+        if (staleUnlocked) {
+          await serial.enqueue(async () => {
+            const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+            await syncTaskPlan({ paths, graph });
+          });
+          continue;
+        }
+
+        const scaffold = await ensurePlannerScaffoldingDb({ paths, config });
+        if (scaffold.updated) {
+          await serial.enqueue(async () => {
+            const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+            await syncTaskPlan({ paths, graph });
+          });
+          ui.event(
+            "info",
+            `Planner scaffolding ${
+              scaffold.addedIds.length > 0
+                ? `added ${scaffold.addedIds.length} node${scaffold.addedIds.length === 1 ? "" : "s"}`
+                : "updated deps"
+            }.`,
+          );
+          continue;
+        }
+
+        let spawned = 0;
+        if (!dryRun && inFlight.size < maxWorkerCount) {
+          const candidates = await selectRunnableCandidates({ dbPath: paths.dbPath, nowIso: nowIso(), limit: candidateLimit });
+          for (const row of candidates) {
+            if (inFlight.size >= maxWorkerCount) break;
+            const nodeId = String(row?.id || "").trim();
+            if (!nodeId) continue;
+            if (inFlight.has(nodeId)) continue;
+
+            const node = await getNode({ dbPath: paths.dbPath, nodeId });
+            if (!node) continue;
+
+            ui.event("select", ui.formatNode(node));
+            await appendLine(activityPath, `[${nowIso()}] select ${node.id}`);
+            spawnWorker(node);
+            spawned += 1;
+          }
+        }
+
+        if (inFlight.size > 0) {
+          await Promise.race([...inFlight.values()]);
+          continue;
+        }
+
+        const nodeRow = await selectNextRunnableNode({ dbPath: paths.dbPath, nowIso: nowIso() });
+        if (nodeRow) continue;
+
+        if (await allDoneDb({ dbPath: paths.dbPath })) {
+          ui.event("done", "All nodes done.");
+          return;
+        }
+        if (once) return;
+
+        const counts = await countByStatusDb({ dbPath: paths.dbPath });
+        const countsSig = stableCountsSig(counts);
+        if (countsSig !== lastCountsSig) {
+          lastCountsSig = countsSig;
+          ui.event("info", `queue: ${ui.formatCounts(counts)}`);
+        }
+
+        const needsHuman = Number(counts.needs_human || 0);
+        const openCount = Number(counts.open || 0);
+        const failedCount = Number(counts.failed || 0);
+        const terminalOnly = needsHuman === 0 && openCount === 0 && Number(counts.in_progress || 0) === 0;
+        if (terminalOnly && failedCount > 0) {
+          const failedIds = (await sqliteQueryJson(paths.dbPath, "SELECT id FROM nodes WHERE status='failed' ORDER BY id;"))
+            .map((r) => r.id)
+            .filter(Boolean);
+          ui.event("fail", `No runnable nodes. ${failedCount} node${failedCount === 1 ? "" : "s"} failed.`);
+          if (failedIds.length > 0) ui.detail(`failed: ${failedIds.join(", ")}`);
+          process.exitCode = 1;
+          return;
+        }
+
+        const failedDeps = await listFailedDepsBlockingOpenNodes({ dbPath: paths.dbPath });
+        const isBlockedByFailed = failedDeps.length > 0 && openCount > 0;
+        const idleReason = needsHuman > 0 ? "needs_human" : isBlockedByFailed ? "blocked_failed" : "idle";
+
+        if (idleReason !== lastIdleReason) {
+          lastIdleReason = idleReason;
+          if (idleReason === "needs_human") {
+            ui.event(
+              "checkpoint",
+              canPrompt && !noPrompt
+                ? `Waiting for human input (${needsHuman} node${needsHuman === 1 ? "" : "s"}). Answer below to continue.`
+                : `Waiting for human input (${needsHuman} node${needsHuman === 1 ? "" : "s"}). Run \`choreo answer\` or \`choreo status\`.`,
+            );
+          } else if (idleReason === "blocked_failed") {
+            ui.event(
+              "fail",
+              `No runnable nodes. ${openCount} open node${openCount === 1 ? "" : "s"} blocked by failed deps: ${failedDeps.join(", ")}`,
+            );
+          }
+        }
+
+        if (idleReason === "needs_human" && !noPrompt && canPrompt) {
+          let answered = false;
+          try {
+            answered = await answerNeedsHumanInteractiveDb({ paths, ui, abortSignal });
+          } catch (error) {
+            ui.event("warn", `Failed to collect checkpoint answer: ${error?.message || String(error)}`);
+          }
+          if (answered) continue;
+          return;
+        }
+
+        if (idleReason === "blocked_failed") {
+          const toReset = [];
+          for (const depId of failedDeps) {
+            const failedNode = await getNode({ dbPath: paths.dbPath, nodeId: depId });
+            if (!failedNode) continue;
+            const resetCount = Number(failedNode.autoResetCount || 0);
+            if (resetCount >= autoResetFailedMax) continue;
+            toReset.push(depId);
+          }
+
+          if (toReset.length > 0) {
+            const now = nowIso();
+            for (const depId of toReset) {
+              await sqliteExec(
+                paths.dbPath,
+                `UPDATE nodes\n` +
+                  `SET status='open',\n` +
+                  `    attempts=0,\n` +
+                  `    checkpoint_json=NULL,\n` +
+                  `    lock_run_id=NULL,\n` +
+                  `    lock_started_at=NULL,\n` +
+                  `    lock_pid=NULL,\n` +
+                  `    lock_host=NULL,\n` +
+                  `    auto_reset_count=auto_reset_count+1,\n` +
+                  `    last_auto_reset_at='${now.replace(/'/g, "''")}',\n` +
+                  `    updated_at='${now.replace(/'/g, "''")}'\n` +
+                  `WHERE id='${String(depId).replace(/'/g, "''")}';\n`,
+              );
+            }
+            await serial.enqueue(async () => {
+              const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+              await syncTaskPlan({ paths, graph });
+            });
+            await appendLine(activityPath, `[${now}] auto-reset failed nodes: ${toReset.join(", ")}`);
+
+            const progressPath = path.join(paths.memoryDir, "progress.md");
+            const lines = [];
+            lines.push("");
+            lines.push(`## [${now}] Auto-reset failed nodes`);
+            lines.push(`- nodes: ${toReset.join(", ")}`);
+            lines.push(`- reason: open nodes blocked by failed deps`);
+            await writeFile(progressPath, lines.join("\n") + "\n", { encoding: "utf8", flag: "a" });
+
+            ui.event("warn", `Reopened failed node${toReset.length === 1 ? "" : "s"}: ${toReset.join(", ")}. Continuing...`);
+            continue;
+          }
+
+          if (canPrompt && !noPrompt) {
+            const rl = createInterface({ input: process.stdin, output: process.stdout });
+            let choice = "";
+            try {
+              const prompt = `Retry failed deps again? (${failedDeps.join(", ")}) [y/N]: `;
+              choice = (await rl.question(prompt, { signal: abortSignal })).trim().toLowerCase();
+            } finally {
+              rl.close();
+            }
+            if (choice === "y" || choice === "yes") {
+              const now = nowIso();
+              for (const depId of failedDeps) {
+                await sqliteExec(
+                  paths.dbPath,
+                  `UPDATE nodes\n` +
+                    `SET status='open',\n` +
+                    `    attempts=0,\n` +
+                    `    checkpoint_json=NULL,\n` +
+                    `    lock_run_id=NULL,\n` +
+                    `    lock_started_at=NULL,\n` +
+                    `    lock_pid=NULL,\n` +
+                    `    lock_host=NULL,\n` +
+                    `    manual_reset_count=manual_reset_count+1,\n` +
+                    `    last_manual_reset_at='${now.replace(/'/g, "''")}',\n` +
+                    `    updated_at='${now.replace(/'/g, "''")}'\n` +
+                    `WHERE id='${String(depId).replace(/'/g, "''")}';\n`,
+                );
+              }
+              await serial.enqueue(async () => {
+                const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+                await syncTaskPlan({ paths, graph });
+              });
+              await appendLine(activityPath, `[${now}] manual-reset failed nodes: ${failedDeps.join(", ")}`);
+              ui.event("warn", `Reopened failed deps. Continuing...`);
+              continue;
+            }
+            return;
+          }
+
+          process.exitCode = 1;
+          return;
+        }
+
+        await appendLine(activityPath, `[${nowIso()}] idle`);
+        await sleep(intervalMs, abortSignal);
+        continue;
+      }
+    }
+
+    if (workers > 1) {
+      await runParallelSupervisor();
+      return;
+    }
+
     while (true) {
       iter += 1;
       if (abortSignal.aborted) {
@@ -1825,7 +2120,7 @@ function clearStaleLocks(graph, staleSeconds) {
   return changed;
 }
 
-async function executeNode({ rootDir, paths, config, node, run, activityPath, errorsPath, live = false, ui, abortSignal = null }) {
+async function executeNode({ rootDir, paths, config, node, run, activityPath, errorsPath, live = false, ui, abortSignal = null, serial = null }) {
   const consoleUi = ui || createUi({ noColor: false });
   const spawnIdentity = await resolveSpawnIdentity({ rootDir: paths.rootDir });
   const identityEnv = envForIdentity(spawnIdentity);
@@ -1841,8 +2136,12 @@ async function executeNode({ rootDir, paths, config, node, run, activityPath, er
   });
   if (!claimed) return;
 
-  const graphAfterClaim = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
-  await syncTaskPlan({ paths, graph: graphAfterClaim });
+  const syncAfterClaim = async () => {
+    const graphAfterClaim = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+    await syncTaskPlan({ paths, graph: graphAfterClaim });
+  };
+  if (serial?.enqueue) await serial.enqueue(syncAfterClaim);
+  else await syncAfterClaim();
 
   const runDir = path.join(paths.runsDir, run);
   await ensureDir(runDir);
@@ -1866,10 +2165,14 @@ async function executeNode({ rootDir, paths, config, node, run, activityPath, er
 
   const runner = config.runners?.[runnerName];
   if (!runner?.cmd) {
-    await appendLine(errorsPath, `[${nowIso()}] missing runner for role=${role} runner=${runnerName}`);
-    await unlockNodeDb({ dbPath: paths.dbPath, nodeId: node.id, status: "open", nowIso: nowIso() });
-    const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
-    await syncTaskPlan({ paths, graph });
+    const handleMissingRunner = async () => {
+      await appendLine(errorsPath, `[${nowIso()}] missing runner for role=${role} runner=${runnerName}`);
+      await unlockNodeDb({ dbPath: paths.dbPath, nodeId: node.id, status: "open", nowIso: nowIso() });
+      const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+      await syncTaskPlan({ paths, graph });
+    };
+    if (serial?.enqueue) await serial.enqueue(handleMissingRunner);
+    else await handleMissingRunner();
     return;
   }
 
@@ -1922,10 +2225,14 @@ async function executeNode({ rootDir, paths, config, node, run, activityPath, er
   consoleUi.detail(`log: ${stdoutPath}`);
 
   if (abortSignal?.aborted) {
-    await appendLine(activityPath, `[${nowIso()}] cancelled node=${node.id} run=${run}`);
-    await unlockNodeDb({ dbPath: paths.dbPath, nodeId: node.id, status: "open", nowIso: nowIso() });
-    const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
-    await syncTaskPlan({ paths, graph });
+    const handleCancelled = async () => {
+      await appendLine(activityPath, `[${nowIso()}] cancelled node=${node.id} run=${run}`);
+      await unlockNodeDb({ dbPath: paths.dbPath, nodeId: node.id, status: "open", nowIso: nowIso() });
+      const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+      await syncTaskPlan({ paths, graph });
+    };
+    if (serial?.enqueue) await serial.enqueue(handleCancelled);
+    else await handleCancelled();
     return;
   }
 
@@ -1963,10 +2270,14 @@ async function executeNode({ rootDir, paths, config, node, run, activityPath, er
   );
 
   if (execRes.aborted || abortSignal?.aborted) {
-    await appendLine(activityPath, `[${nowIso()}] cancelled node=${node.id} run=${run}`);
-    await unlockNodeDb({ dbPath: paths.dbPath, nodeId: node.id, status: "open", nowIso: nowIso() });
-    const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
-    await syncTaskPlan({ paths, graph });
+    const handleCancelled = async () => {
+      await appendLine(activityPath, `[${nowIso()}] cancelled node=${node.id} run=${run}`);
+      await unlockNodeDb({ dbPath: paths.dbPath, nodeId: node.id, status: "open", nowIso: nowIso() });
+      const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+      await syncTaskPlan({ paths, graph });
+    };
+    if (serial?.enqueue) await serial.enqueue(handleCancelled);
+    else await handleCancelled();
     return;
   }
 
@@ -2011,18 +2322,22 @@ async function executeNode({ rootDir, paths, config, node, run, activityPath, er
   else if (finalStatus === "checkpoint") await appendLine(activityPath, `[${nowIso()}] checkpoint node=${node.id}`);
   else await appendLine(errorsPath, `[${nowIso()}] fail node=${node.id}`);
 
-  const defaultRetryPolicy = resolveDefaultRetryPolicy(config);
-  await applyResultDb({
-    dbPath: paths.dbPath,
-    nodeId: node.id,
-    runId: run,
-    result,
-    nowIso: nowIso(),
-    defaultRetryPolicy,
-  });
-  const graphAfter = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
-  await syncTaskPlan({ paths, graph: graphAfter });
-  await appendProgress({ paths, node, run, role, runnerName, result, stdoutPath });
+  const applyOutcome = async () => {
+    const defaultRetryPolicy = resolveDefaultRetryPolicy(config);
+    await applyResultDb({
+      dbPath: paths.dbPath,
+      nodeId: node.id,
+      runId: run,
+      result,
+      nowIso: nowIso(),
+      defaultRetryPolicy,
+    });
+    const graphAfter = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+    await syncTaskPlan({ paths, graph: graphAfter });
+    await appendProgress({ paths, node, run, role, runnerName, result, stdoutPath });
+  };
+  if (serial?.enqueue) await serial.enqueue(applyOutcome);
+  else await applyOutcome();
 
   const summary = consoleUi.truncate(result?.summary || "", 180);
   if (finalStatus === "success") {
@@ -2030,6 +2345,17 @@ async function executeNode({ rootDir, paths, config, node, run, activityPath, er
   } else if (finalStatus !== "checkpoint") {
     consoleUi.event("fail", `${node.id}${duration ? ` (${duration})` : ""}${summary ? ` — ${summary}` : ""}`);
   }
+}
+
+function createSerialQueue() {
+  let chain = Promise.resolve();
+  return {
+    enqueue: (fn) => {
+      const next = chain.then(fn);
+      chain = next.catch(() => {});
+      return next;
+    },
+  };
 }
 
 function formatNodeResume(node) {
