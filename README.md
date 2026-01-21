@@ -67,3 +67,9 @@ Project state is stored in:
   - `"supervisor": { "multiVerifier": "all" }`
   - `"roles": { "verifier": ["codex", "gemini"] }`
   - choreo will create one verify node per verifier runner and pin it via `node.runner`.
+
+## Performance
+
+- Default verify nodes can run as a non‑LLM shell runner (`defaults.verifyRunner`).
+- `supervisor.packetMode="thin"` reduces repeated context sent to executors/verifiers/integrators.
+- See `docs/fast-config.md` for a recommended “fast profile”.
