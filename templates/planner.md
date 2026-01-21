@@ -60,10 +60,12 @@ KV cheat sheet:
 
 ## Planning Rules
 - Keep nodes small and verifiable. Prefer 2–5 tasks over 1 giant task.
-- Always include verification + closing gates:
-  - For every `task-*`, add at least one `verify-*` node (`type="verify"`) that depends on the task.
-  - Add exactly one `integrate-*` node (`type="integrate"`) that depends on all verify nodes.
-  - Add exactly one `final-verify-*` node (`type="final_verify"`) that depends on the integrate node.
+- Default to **tasks-only** planning (2–6 `task-*` nodes). Choreo will scaffold:
+  - `verify-*` nodes for tasks (using each task’s `verify` commands)
+  - exactly one `integrate-*` node
+  - exactly one `final-verify-*` node
+- Do **not** create additional `integrate-*` or `final-verify-*` nodes. If they already exist, do not duplicate them.
+- Optional: add explicit `verify-*` nodes only when you need specialized gating beyond a task’s `verify` commands.
 - Every task must include:
   - `id`, `title`, `type="task"`, `dependsOn` (if needed)
   - `ownership` globs (to enable safe parallelism later)
