@@ -34,3 +34,16 @@ test("OwnershipLockManager: disjoint resources allowed", () => {
   assert.equal(locks.acquire("n2", { resources: ["b"], mode: "write" }), true);
 });
 
+test("OwnershipLockManager: __global__ write blocks all other locks", () => {
+  const locks = new OwnershipLockManager();
+  assert.equal(locks.acquire("n1", { resources: ["__global__"], mode: "write" }), true);
+  assert.equal(locks.acquire("n2", { resources: ["a"], mode: "read" }), false);
+  assert.equal(locks.acquire("n3", { resources: ["a"], mode: "write" }), false);
+});
+
+test("OwnershipLockManager: __global__ read blocks writers, allows reads", () => {
+  const locks = new OwnershipLockManager();
+  assert.equal(locks.acquire("n1", { resources: ["__global__"], mode: "read" }), true);
+  assert.equal(locks.acquire("n2", { resources: ["a"], mode: "write" }), false);
+  assert.equal(locks.acquire("n3", { resources: ["a"], mode: "read" }), true);
+});

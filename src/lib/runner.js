@@ -14,6 +14,7 @@ export function resolveRoleRunner(role, config) {
 export function resolveNodeRole(node) {
   const type = String(node?.type || "").toLowerCase();
   if (type === "task") return "executor";
+  if (type === "merge") return "executor";
   if (type === "verify") return "verifier";
   if (type === "integrate") return "integrator";
   if (type === "plan" || type === "epic") return "planner";

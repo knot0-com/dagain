@@ -27,9 +27,11 @@ export function defaultConfig() {
     defaults: {
       retryPolicy: { maxAttempts: 1 },
       verifyRunner: "shellVerify",
+      mergeRunner: "shellMerge",
     },
     runners: {
       shellVerify: { cmd: 'node "$CHOREO_SHELL_VERIFIER"' },
+      shellMerge: { cmd: 'node "$CHOREO_SHELL_MERGE"' },
       codex: { cmd: "codex exec --yolo --skip-git-repo-check -" },
       // Note: Claude forbids --dangerously-skip-permissions when running as root/sudo.
       // choreo strips that flag automatically in those contexts.
@@ -55,6 +57,7 @@ export function defaultConfig() {
 	      autoResetFailedMax: 1,
 	      claudeSensitiveFallbackRunner: "codex",
 	      multiVerifier: "one",
+	      worktrees: { mode: "off", dir: ".choreo/worktrees" },
 	    }
   };
 }

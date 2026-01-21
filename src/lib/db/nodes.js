@@ -62,6 +62,7 @@ export async function selectNextRunnableNode({ dbPath, nowIso }) {
       `ORDER BY\n` +
       `  CASE lower(n.type)\n` +
       `    WHEN 'verify' THEN 0\n` +
+      `    WHEN 'merge' THEN 1\n` +
       `    WHEN 'task' THEN 1\n` +
       `    WHEN 'plan' THEN 2\n` +
       `    WHEN 'epic' THEN 2\n` +
@@ -101,6 +102,7 @@ export async function selectRunnableCandidates({ dbPath, nowIso, limit = 50 }) {
       `ORDER BY\n` +
       `  CASE lower(n.type)\n` +
       `    WHEN 'verify' THEN 0\n` +
+      `    WHEN 'merge' THEN 1\n` +
       `    WHEN 'task' THEN 1\n` +
       `    WHEN 'plan' THEN 2\n` +
       `    WHEN 'epic' THEN 2\n` +

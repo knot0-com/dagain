@@ -34,9 +34,22 @@ export class OwnershipLockManager {
     if (!id) return false;
 
     const nextMode = normalizeMode(mode);
-    const nextResources = this.normalizeResources(resources);
+    let nextResources = this.normalizeResources(resources);
+    const wantsGlobal = nextResources.includes("__global__");
+    if (wantsGlobal) nextResources = ["__global__"];
 
     if (this._locksByNodeId.has(id)) this.release(id);
+
+    if (wantsGlobal) {
+      for (const state of this._resourceState.values()) {
+        if (state.writer && state.writer !== id) return false;
+        if (nextMode === "write" && state.readers.size > 0) return false;
+      }
+    } else {
+      const globalState = this._resourceState.get("__global__") || { readers: new Set(), writer: null };
+      if (globalState.writer && globalState.writer !== id) return false;
+      if (nextMode === "write" && globalState.readers.size > 0) return false;
+    }
 
     for (const resource of nextResources) {
       const state = this._resourceState.get(resource) || { readers: new Set(), writer: null };
@@ -81,4 +94,3 @@ export class OwnershipLockManager {
     this._locksByNodeId.delete(id);
   }
 }
-

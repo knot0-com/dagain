@@ -68,10 +68,11 @@ KV cheat sheet:
 - Optional: add explicit `verify-*` nodes only when you need specialized gating beyond a task’s `verify` commands.
 - Every task must include:
   - `id`, `title`, `type="task"`, `dependsOn` (if needed)
-  - `ownership` globs (to enable safe parallelism later)
+  - `ownership` globs (enables safe parallelism and optional worktree isolation)
   - `acceptance` bullets (measurable)
   - `verify` commands/checks (if applicable)
 - Optional: set `runner: "<runnerName>"` on a node to force a specific runner for that node (useful for multiple independent verifiers).
+- Do not create `merge-*` nodes. If worktrees are enabled, Choreo will insert `merge-*` nodes automatically.
 - Assume executors/verifiers run in YOLO/auto-approval mode for normal dev commands. Do not create checkpoints just to ask permission to run routine commands.
 - If the work requires a human decision, emit a checkpoint instead of guessing.
 - If `Resume Context` includes a human answer, treat it as authoritative and proceed; do not re-ask the same question.

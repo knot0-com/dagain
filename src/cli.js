@@ -1,5 +1,6 @@
 import path from "node:path";
 import os from "node:os";
+import { spawn } from "node:child_process";
 import { access, chmod, chown, lstat, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { constants as fsConstants } from "node:fs";
@@ -156,6 +157,7 @@ function mergeEnv(a, b) {
 function choreoRunnerEnv(paths, { nodeId, runId, parentNodeId = "" }) {
   const choreoBin = fileURLToPath(new URL("../bin/choreo.js", import.meta.url));
   const shellVerifier = fileURLToPath(new URL("../scripts/shell-verifier.js", import.meta.url));
+  const shellMerge = fileURLToPath(new URL("../scripts/shell-merge.js", import.meta.url));
   return {
     CHOREO_DB: paths.dbPath,
     CHOREO_NODE_ID: nodeId,
@@ -166,6 +168,7 @@ function choreoRunnerEnv(paths, { nodeId, runId, parentNodeId = "" }) {
     CHOREO_RUNS_DIR: paths.runsDir,
     CHOREO_BIN: choreoBin,
     CHOREO_SHELL_VERIFIER: shellVerifier,
+    CHOREO_SHELL_MERGE: shellMerge,
   };
 }
 
@@ -432,6 +435,88 @@ function runId() {
   const stamp = nowIso().replace(/[:.]/g, "-");
   const rand = Math.random().toString(16).slice(2, 8);
   return `${stamp}-${rand}`;
+}
+
+function normalizeWorktreeMode(value) {
+  const mode = String(value || "").toLowerCase().trim();
+  if (mode === "always") return "always";
+  if (mode === "on-conflict" || mode === "onconflict") return "on-conflict";
+  return "off";
+}
+
+function resolveWorktreesDir({ paths, config }) {
+  const raw = String(config?.supervisor?.worktrees?.dir || ".choreo/worktrees").trim() || ".choreo/worktrees";
+  return path.isAbsolute(raw) ? raw : path.join(paths.rootDir, raw);
+}
+
+function runProcessCapture(cmd, args, { cwd, stdinText = null } = {}) {
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const child = spawn(cmd, Array.isArray(args) ? args : [], {
+      cwd: cwd || process.cwd(),
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (d) => (stdout += d));
+    child.stderr.on("data", (d) => (stderr += d));
+    child.on("close", (code, signal) =>
+      resolve({
+        code: code ?? 0,
+        signal: signal ?? null,
+        durationMs: Date.now() - startedAt,
+        stdout,
+        stderr,
+      }),
+    );
+    child.on("error", (err) =>
+      resolve({
+        code: 1,
+        signal: null,
+        durationMs: Date.now() - startedAt,
+        stdout: "",
+        stderr: String(err?.message || err || "spawn error"),
+      }),
+    );
+    try {
+      if (stdinText != null) child.stdin.end(String(stdinText));
+      else child.stdin.end();
+    } catch {
+      // ignore
+    }
+  });
+}
+
+async function ensureGitWorktree({ rootDir, worktreePath }) {
+  const gitDir = await runProcessCapture("git", ["-C", rootDir, "rev-parse", "--git-dir"], { cwd: rootDir });
+  if (gitDir.code !== 0) throw new Error("Not a git repository");
+
+  await ensureDir(path.dirname(worktreePath));
+  const exists = await pathExists(worktreePath);
+  if (exists) {
+    const ok = await runProcessCapture("git", ["-C", worktreePath, "rev-parse", "--is-inside-work-tree"], { cwd: worktreePath });
+    if (ok.code !== 0) {
+      try {
+        await rm(worktreePath, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  if (!(await pathExists(worktreePath))) {
+    const add = await runProcessCapture("git", ["-C", rootDir, "worktree", "add", "--detach", "--force", worktreePath, "HEAD"], { cwd: rootDir });
+    if (add.code !== 0) {
+      const msg = String(add.stderr || add.stdout || "").trim();
+      throw new Error(`git worktree add failed: ${msg || `exit ${add.code}`}`);
+    }
+  }
+
+  await runProcessCapture("git", ["-C", worktreePath, "reset", "--hard", "HEAD"], { cwd: worktreePath });
+  await runProcessCapture("git", ["-C", worktreePath, "clean", "-fd"], { cwd: worktreePath });
 }
 
 async function readBuiltInTemplate(role) {
@@ -1252,6 +1337,8 @@ async function runCommand(rootDir, flags) {
   const workersNum = Number(workersRaw);
   const requestedWorkers = Number.isFinite(workersNum) && workersNum > 0 ? Math.floor(workersNum) : 1;
   const workers = dryRun || once ? 1 : requestedWorkers;
+  const worktreeMode = normalizeWorktreeMode(config?.supervisor?.worktrees?.mode);
+  const worktreesDir = worktreeMode === "off" ? null : resolveWorktreesDir({ paths, config });
 
   const activityPath = path.join(paths.memoryDir, "activity.log");
   const errorsPath = path.join(paths.memoryDir, "errors.log");
@@ -1261,6 +1348,7 @@ async function runCommand(rootDir, flags) {
   ui.detail(`goal: ${path.relative(paths.rootDir, paths.goalPath) || "GOAL.md"}`);
   ui.detail(`state: ${path.relative(paths.rootDir, paths.choreoDir) || ".choreo"}`);
   if (workers > 1) ui.detail(`workers: ${workers}`);
+  if (worktreeMode !== "off" && worktreesDir) ui.detail(`worktrees: ${worktreeMode} (${path.relative(paths.rootDir, worktreesDir) || worktreesDir})`);
   ui.writeLine(ui.hr());
 
   let acquired = false;
@@ -1345,19 +1433,28 @@ async function runCommand(rootDir, flags) {
       const serial = createSerialQueue();
       const locks = new OwnershipLockManager();
       const inFlight = new Map();
+      const worktreeMode = normalizeWorktreeMode(config?.supervisor?.worktrees?.mode);
+      const worktreesDir = worktreeMode === "off" ? null : resolveWorktreesDir({ paths, config });
+      const worktreeSerial = createSerialQueue();
 
       const maxWorkerCount = workers;
       const candidateLimit = Math.max(50, maxWorkerCount * 10);
 
-      const spawnWorker = async (node) => {
+      const spawnWorker = async (node, { nodeCwd = null, worktreePath = null } = {}) => {
         const run = runId();
         const promise = Promise.resolve()
-          .then(() =>
-            executeNode({
+          .then(async () => {
+            if (worktreePath) {
+              await worktreeSerial.enqueue(async () => {
+                await ensureGitWorktree({ rootDir: paths.rootDir, worktreePath });
+              });
+            }
+            return executeNode({
               rootDir,
               paths,
               config,
               node,
+              nodeCwd,
               run,
               activityPath,
               errorsPath,
@@ -1366,8 +1463,8 @@ async function runCommand(rootDir, flags) {
               abortSignal,
               serial,
               multiWorker: true,
-            }),
-          )
+            });
+          })
           .catch(async (error) => {
             const message = error?.message || String(error);
             await appendLine(errorsPath, `[${nowIso()}] worker error node=${node.id} run=${run} ${message}`);
@@ -1454,13 +1551,41 @@ async function runCommand(rootDir, flags) {
             if (!node) continue;
 
             const role = resolveNodeRole(node);
-            const resources = locks.normalizeResources(node.ownership);
-            const mode = locks.modeForRole(role);
-            if (!locks.acquire(node.id, { resources, mode })) continue;
+            const nodeType = normalizeNodeType(node?.type);
+            let lockAcquired = false;
+            let nodeCwd = null;
+            let worktreePath = null;
+
+            const canUseWorktrees = worktreeMode !== "off" && Boolean(worktreesDir);
+            const isExecutorTask = role === "executor" && nodeType === "task";
+
+            if (canUseWorktrees && isExecutorTask && worktreeMode === "always") {
+              worktreePath = path.join(worktreesDir, sanitizeNodeIdPart(node.id));
+              nodeCwd = worktreePath;
+            } else if (canUseWorktrees && isExecutorTask && worktreeMode === "on-conflict") {
+              const resources = locks.normalizeResources(node.ownership);
+              const mode = locks.modeForRole(role);
+              if (locks.acquire(node.id, { resources, mode })) {
+                lockAcquired = true;
+              } else {
+                await serial.enqueue(async () => {
+                  await ensureMergeNodeForTaskDb({ paths, config, taskId: node.id });
+                });
+                worktreePath = path.join(worktreesDir, sanitizeNodeIdPart(node.id));
+                nodeCwd = worktreePath;
+              }
+            }
+
+            if (!nodeCwd && !lockAcquired) {
+              const resources = locks.normalizeResources(node.ownership);
+              const mode = locks.modeForRole(role);
+              if (!locks.acquire(node.id, { resources, mode })) continue;
+              lockAcquired = true;
+            }
 
             ui.event("select", ui.formatNode(node));
             await appendLine(activityPath, `[${nowIso()}] select ${node.id}`);
-            spawnWorker(node);
+            spawnWorker(node, { nodeCwd, worktreePath });
             spawned += 1;
           }
         }
@@ -1849,11 +1974,22 @@ async function runCommand(rootDir, flags) {
       }
 
       const run = runId();
+      let nodeCwd = null;
+      if (worktreeMode === "always" && worktreesDir) {
+        const role = resolveNodeRole(node);
+        const nodeType = normalizeNodeType(node?.type);
+        if (role === "executor" && nodeType === "task") {
+          const worktreePath = path.join(worktreesDir, sanitizeNodeIdPart(node.id));
+          await ensureGitWorktree({ rootDir: paths.rootDir, worktreePath });
+          nodeCwd = worktreePath;
+        }
+      }
       await executeNode({
         rootDir,
         paths,
         config,
         node,
+        nodeCwd,
         run,
         activityPath,
         errorsPath,
@@ -1907,13 +2043,71 @@ async function clearStaleLocksDb({ paths, staleLockSeconds }) {
   return changed;
 }
 
+async function ensureMergeNodeForTaskDb({ paths, config, taskId }) {
+  const taskNodeId = String(taskId || "").trim();
+  if (!taskNodeId) return "";
+
+  const mergeId = `merge-${sanitizeNodeIdPart(taskNodeId)}`;
+  const existing = await sqliteQueryJson(paths.dbPath, `SELECT id FROM nodes WHERE id=${sqlQuote(mergeId)} LIMIT 1;\n`);
+  const now = nowIso();
+
+  if (!existing?.[0]?.id) {
+    const defaultMergeRunner = String(config?.defaults?.mergeRunner || "shellMerge").trim();
+    const defaultRetryPolicy = resolveDefaultRetryPolicy(config) || { maxAttempts: 1 };
+    await sqliteExec(
+      paths.dbPath,
+      `INSERT OR IGNORE INTO nodes(\n` +
+        `  id, title, type, status, parent_id,\n` +
+        `  runner, inputs_json, ownership_json, acceptance_json, verify_json,\n` +
+        `  retry_policy_json, attempts,\n` +
+        `  created_at, updated_at\n` +
+        `)\n` +
+        `VALUES(\n` +
+        `  ${sqlQuote(mergeId)}, ${sqlQuote(`Merge: ${taskNodeId}`)}, 'merge', 'open', NULL,\n` +
+        `  ${defaultMergeRunner ? sqlQuote(defaultMergeRunner) : "NULL"}, '[]', ${sqlQuote(JSON.stringify(["__global__"]))}, ${sqlQuote(
+          JSON.stringify(["Applies the task worktree changes back to the root workspace"]),
+        )}, '[]',\n` +
+        `  ${sqlQuote(JSON.stringify(defaultRetryPolicy))}, 0,\n` +
+        `  ${sqlQuote(now)}, ${sqlQuote(now)}\n` +
+        `);\n`,
+    );
+    await sqliteExec(
+      paths.dbPath,
+      `INSERT OR IGNORE INTO deps(node_id, depends_on_id)\n` + `VALUES(${sqlQuote(mergeId)}, ${sqlQuote(taskNodeId)});\n`,
+    );
+  }
+
+  const verifyRows = await sqliteQueryJson(
+    paths.dbPath,
+    `SELECT d.node_id AS id\n` +
+      `FROM deps d\n` +
+      `JOIN nodes n ON n.id = d.node_id\n` +
+      `WHERE d.depends_on_id = ${sqlQuote(taskNodeId)} AND lower(n.type)='verify'\n` +
+      `ORDER BY d.node_id;\n`,
+  );
+
+  for (const row of verifyRows) {
+    const verifyId = String(row?.id || "").trim();
+    if (!verifyId) continue;
+    await sqliteExec(
+      paths.dbPath,
+      `DELETE FROM deps WHERE node_id=${sqlQuote(verifyId)} AND depends_on_id=${sqlQuote(taskNodeId)};\n` +
+        `INSERT OR IGNORE INTO deps(node_id, depends_on_id) VALUES(${sqlQuote(verifyId)}, ${sqlQuote(mergeId)});\n` +
+        `UPDATE nodes SET updated_at=${sqlQuote(nowIso())} WHERE id=${sqlQuote(verifyId)};\n`,
+    );
+  }
+
+  return mergeId;
+}
+
 async function ensurePlannerScaffoldingDb({ paths, config }) {
   const graph = await loadWorkgraphFromDb({ dbPath: paths.dbPath });
-  const beforeIntegrate = listIntegrateNodes(graph)[0] || null;
-  const beforeIntegrateId = beforeIntegrate?.id ? String(beforeIntegrate.id) : "";
-  const beforeIntegrateSig = beforeIntegrateId
-    ? (Array.isArray(beforeIntegrate?.dependsOn) ? beforeIntegrate.dependsOn : []).slice().sort().join("|")
-    : "";
+  const beforeDepsSigById = new Map();
+  for (const node of Array.isArray(graph?.nodes) ? graph.nodes : []) {
+    if (!node?.id) continue;
+    const deps = Array.isArray(node?.dependsOn) ? node.dependsOn : [];
+    beforeDepsSigById.set(node.id, deps.slice().sort().join("|"));
+  }
 
   const scaffold = ensurePlannerScaffolding({ graph, config });
   if (!scaffold.updated) return scaffold;
@@ -1951,21 +2145,20 @@ async function ensurePlannerScaffoldingDb({ paths, config }) {
     }
   }
 
-  const integrate = listIntegrateNodes(graph)[0] || null;
-  if (integrate?.id && integrate.id === beforeIntegrateId && normalizeStatus(integrate?.status) === "open") {
-    const nextSig = (Array.isArray(integrate?.dependsOn) ? integrate.dependsOn : []).slice().sort().join("|");
-    if (nextSig !== beforeIntegrateSig) {
-      await sqliteExec(paths.dbPath, `DELETE FROM deps WHERE node_id=${sqlQuote(integrate.id)};\n`);
-      for (const depId of Array.isArray(integrate.dependsOn) ? integrate.dependsOn : []) {
-        const dep = String(depId || "").trim();
-        if (!dep) continue;
-        await sqliteExec(paths.dbPath, `INSERT OR IGNORE INTO deps(node_id, depends_on_id) VALUES(${sqlQuote(integrate.id)}, ${sqlQuote(dep)});\n`);
-      }
-      await sqliteExec(
-        paths.dbPath,
-        `UPDATE nodes SET updated_at=${sqlQuote(nowIso())} WHERE id=${sqlQuote(integrate.id)};\n`,
-      );
+  for (const node of Array.isArray(graph?.nodes) ? graph.nodes : []) {
+    if (!node?.id) continue;
+    if (!beforeDepsSigById.has(node.id)) continue;
+    const beforeSig = beforeDepsSigById.get(node.id) || "";
+    const deps = Array.isArray(node?.dependsOn) ? node.dependsOn : [];
+    const nextSig = deps.slice().sort().join("|");
+    if (beforeSig === nextSig) continue;
+    await sqliteExec(paths.dbPath, `DELETE FROM deps WHERE node_id=${sqlQuote(node.id)};\n`);
+    for (const depId of deps) {
+      const dep = String(depId || "").trim();
+      if (!dep) continue;
+      await sqliteExec(paths.dbPath, `INSERT OR IGNORE INTO deps(node_id, depends_on_id) VALUES(${sqlQuote(node.id)}, ${sqlQuote(dep)});\n`);
     }
+    await sqliteExec(paths.dbPath, `UPDATE nodes SET updated_at=${sqlQuote(nowIso())} WHERE id=${sqlQuote(node.id)};\n`);
   }
 
   return scaffold;
@@ -2130,6 +2323,7 @@ async function executeNode({
   paths,
   config,
   node,
+  nodeCwd = null,
   run,
   activityPath,
   errorsPath,
@@ -2140,6 +2334,7 @@ async function executeNode({
   multiWorker = false,
 }) {
   const consoleUi = ui || createUi({ noColor: false });
+  const runnerCwd = typeof nodeCwd === "string" && nodeCwd.trim() ? nodeCwd : paths.rootDir;
   const spawnIdentity = await resolveSpawnIdentity({ rootDir: paths.rootDir });
   const identityEnv = envForIdentity(spawnIdentity);
 
@@ -2213,15 +2408,18 @@ async function executeNode({
   const taskPlanDraft = includePlanningDrafts ? await readTextTruncated(taskPlanPath, 20_000) : "";
   const findingsDraft = includePlanningDrafts ? await readTextTruncated(findingsPath, 20_000) : "";
   const progressDraft = includePlanningDrafts ? await readTextTruncated(progressPath, 20_000) : "";
+  const taskPlanPathForPacket = runnerCwd === paths.rootDir ? path.relative(paths.rootDir, taskPlanPath) : taskPlanPath;
+  const findingsPathForPacket = runnerCwd === paths.rootDir ? path.relative(paths.rootDir, findingsPath) : findingsPath;
+  const progressPathForPacket = runnerCwd === paths.rootDir ? path.relative(paths.rootDir, progressPath) : progressPath;
   const nodeResume = formatNodeResume(node);
   const packet = renderTemplate(template, {
-    REPO_ROOT: paths.rootDir,
+    REPO_ROOT: runnerCwd,
     GOAL_PATH: paths.goalPath,
     RUN_ID: run,
     GOAL_DRAFT: goalDraft,
-    TASK_PLAN_PATH: path.relative(paths.rootDir, taskPlanPath),
-    FINDINGS_PATH: path.relative(paths.rootDir, findingsPath),
-    PROGRESS_PATH: path.relative(paths.rootDir, progressPath),
+    TASK_PLAN_PATH: taskPlanPathForPacket,
+    FINDINGS_PATH: findingsPathForPacket,
+    PROGRESS_PATH: progressPathForPacket,
     TASK_PLAN_DRAFT: taskPlanDraft,
     FINDINGS_DRAFT: findingsDraft,
     PROGRESS_DRAFT: progressDraft,
@@ -2259,16 +2457,16 @@ async function executeNode({
   const spinner = !live && !multiWorker ? consoleUi.spinnerStart(`${role} ${node.id}`) : null;
   const liveLinePrefix = consoleUi.c.gray(multiWorker ? `│${node.id}│` : "│") + " ";
   const runnerEnv = mergeEnv(
-    mergeEnv(resolveRunnerEnv({ runnerName, runner, cwd: paths.rootDir, paths }), identityEnv),
+    mergeEnv(resolveRunnerEnv({ runnerName, runner, cwd: runnerCwd, paths }), identityEnv),
     choreoRunnerEnv(paths, { nodeId: node.id, runId: run }),
   );
   await ensureRunnerTmpDir(runnerEnv);
   if (runnerName === "claude")
-    await ensureClaudeProjectTmpWritable({ cwd: paths.rootDir, ui: consoleUi, uid: spawnIdentity?.uid, gid: spawnIdentity?.gid });
+    await ensureClaudeProjectTmpWritable({ cwd: runnerCwd, ui: consoleUi, uid: spawnIdentity?.uid, gid: spawnIdentity?.gid });
   const execRes = await runRunnerCommand({
     cmd: runner.cmd,
     packetPath,
-    cwd: paths.rootDir,
+    cwd: runnerCwd,
     logPath: stdoutPath,
     timeoutMs: Number(runner.timeoutMs ?? config?.supervisor?.runnerTimeoutMs ?? 0),
     tee: Boolean(live),
@@ -2428,6 +2626,11 @@ function listTaskNodes(graph) {
   return nodes.filter((n) => normalizeNodeType(n?.type) === "task");
 }
 
+function listMergeNodes(graph) {
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  return nodes.filter((n) => normalizeNodeType(n?.type) === "merge");
+}
+
 function listVerifyNodes(graph) {
   const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
   return nodes.filter((n) => normalizeNodeType(n?.type) === "verify");
@@ -2471,6 +2674,7 @@ function ensurePlannerScaffolding({ graph, config }) {
 
   const tasks = listTaskNodes(graph);
   if (tasks.length === 0) return { addedIds, updated };
+  const mergeNodes = listMergeNodes(graph);
   const verifyNodes = listVerifyNodes(graph);
 
   const configuredMaxAttempts = normalizeMaxAttempts(config?.defaults?.retryPolicy?.maxAttempts);
@@ -2478,18 +2682,75 @@ function ensurePlannerScaffolding({ graph, config }) {
   const integrateMaxAttempts = configuredMaxAttempts ?? 2;
 
   const defaultVerifyRunner = String(config?.defaults?.verifyRunner || "").trim();
+  const defaultMergeRunner = String(config?.defaults?.mergeRunner || "shellMerge").trim();
 
   const verifierRunners = [...new Set(normalizeRunnerList(config?.roles?.verifier ?? config?.roles?.main ?? []))];
   const multiVerifier = String(config?.supervisor?.multiVerifier || "one").toLowerCase().trim() === "all";
 
+  const worktreeMode = normalizeWorktreeMode(config?.supervisor?.worktrees?.mode);
+  const mergeByTaskId = new Map();
+  for (const mergeNode of mergeNodes) {
+    if (!mergeNode?.id) continue;
+    const deps = Array.isArray(mergeNode?.dependsOn) ? mergeNode.dependsOn : [];
+    if (deps.length !== 1) continue;
+    const taskId = String(deps[0] || "").trim();
+    if (!taskId) continue;
+    if (!mergeByTaskId.has(taskId)) mergeByTaskId.set(taskId, mergeNode);
+  }
+
+  if (worktreeMode === "always") {
+    for (const task of tasks) {
+      if (!task?.id) continue;
+      if (mergeByTaskId.has(task.id)) continue;
+
+      const baseId = `merge-${task.id}`;
+      const id = ensureUniqueNodeId(baseId, ids);
+      ids.add(id);
+
+      const mergeNode = {
+        id,
+        title: `Merge: ${task.title || task.id}`,
+        type: "merge",
+        status: "open",
+        dependsOn: [task.id],
+        ...(defaultMergeRunner ? { runner: defaultMergeRunner } : {}),
+        ownership: ["__global__"],
+        acceptance: ["Applies the task worktree changes back to the root workspace"],
+        verify: [],
+        attempts: 0,
+        retryPolicy: { maxAttempts: integrateMaxAttempts },
+        createdAt: now,
+        updatedAt: now,
+      };
+      nodes.push(mergeNode);
+      addedIds.push(id);
+      updated = true;
+      mergeByTaskId.set(task.id, mergeNode);
+    }
+  }
+
   for (const task of tasks) {
     if (!task?.id) continue;
-    const existing = verifyNodes.filter((v) => Array.isArray(v?.dependsOn) && v.dependsOn.includes(task.id));
+    const mergeNode = mergeByTaskId.get(task.id) || null;
+    const verifyDepId = mergeNode?.id ? mergeNode.id : task.id;
+    const existing = verifyNodes.filter(
+      (v) => Array.isArray(v?.dependsOn) && v.dependsOn.some((d) => d === task.id || d === verifyDepId),
+    );
 
     if (multiVerifier && verifierRunners.length > 0) {
       for (const runnerName of verifierRunners) {
         const hasRunner = existing.some((v) => String(v?.runner || "").trim() === runnerName);
-        if (hasRunner) continue;
+        if (hasRunner) {
+          for (const v of existing) {
+            if (String(v?.runner || "").trim() !== runnerName) continue;
+            const deps = Array.isArray(v?.dependsOn) ? v.dependsOn.map(String) : [];
+            if (deps.length === 1 && deps[0] === verifyDepId) continue;
+            v.dependsOn = [verifyDepId];
+            v.updatedAt = now;
+            updated = true;
+          }
+          continue;
+        }
 
         const baseId = `verify-${task.id}-${sanitizeNodeIdPart(runnerName)}`;
         const id = ensureUniqueNodeId(baseId, ids);
@@ -2500,7 +2761,7 @@ function ensurePlannerScaffolding({ graph, config }) {
           title: `Verify (${runnerName}): ${task.title || task.id}`,
           type: "verify",
           status: "open",
-          dependsOn: [task.id],
+          dependsOn: [verifyDepId],
           runner: runnerName,
           ownership: Array.isArray(task.ownership) ? task.ownership : [],
           acceptance: Array.isArray(task.acceptance) ? task.acceptance : [],
@@ -2516,7 +2777,16 @@ function ensurePlannerScaffolding({ graph, config }) {
       continue;
     }
 
-    if (existing.length > 0) continue;
+    if (existing.length > 0) {
+      for (const v of existing) {
+        const deps = Array.isArray(v?.dependsOn) ? v.dependsOn.map(String) : [];
+        if (deps.length === 1 && deps[0] === verifyDepId) continue;
+        v.dependsOn = [verifyDepId];
+        v.updatedAt = now;
+        updated = true;
+      }
+      continue;
+    }
     const baseId = `verify-${task.id}`;
     const id = ensureUniqueNodeId(baseId, ids);
     ids.add(id);
@@ -2526,7 +2796,7 @@ function ensurePlannerScaffolding({ graph, config }) {
       title: `Verify: ${task.title || task.id}`,
       type: "verify",
       status: "open",
-      dependsOn: [task.id],
+      dependsOn: [verifyDepId],
       ...(defaultVerifyRunner ? { runner: defaultVerifyRunner } : {}),
       ownership: Array.isArray(task.ownership) ? task.ownership : [],
       acceptance: Array.isArray(task.acceptance) ? task.acceptance : [],
@@ -2544,11 +2814,17 @@ function ensurePlannerScaffolding({ graph, config }) {
   const integrateNode = integrates[0] || null;
   let integrateId = integrateNode?.id || "";
   if (!integrateId) {
+    const gateIds = new Set(
+      tasks
+        .map((t) => mergeByTaskId.get(t.id)?.id || t.id)
+        .map((v) => String(v || "").trim())
+        .filter(Boolean),
+    );
     const verifyIds = listVerifyNodes(graph)
-      .filter((n) => Array.isArray(n?.dependsOn) && n.dependsOn.some((d) => tasks.some((t) => t.id === d)))
+      .filter((n) => Array.isArray(n?.dependsOn) && n.dependsOn.some((d) => gateIds.has(d)))
       .map((n) => n.id)
       .filter(Boolean);
-    const deps = verifyIds.length > 0 ? verifyIds : tasks.map((t) => t.id).filter(Boolean);
+    const deps = verifyIds.length > 0 ? verifyIds : [...gateIds];
     const id = ensureUniqueNodeId("integrate-000", ids);
     ids.add(id);
     integrateId = id;
@@ -2570,11 +2846,17 @@ function ensurePlannerScaffolding({ graph, config }) {
     addedIds.push(id);
     updated = true;
   } else if (normalizeStatus(integrateNode?.status) === "open") {
+    const gateIds = new Set(
+      tasks
+        .map((t) => mergeByTaskId.get(t.id)?.id || t.id)
+        .map((v) => String(v || "").trim())
+        .filter(Boolean),
+    );
     const verifyIds = listVerifyNodes(graph)
-      .filter((n) => Array.isArray(n?.dependsOn) && n.dependsOn.some((d) => tasks.some((t) => t.id === d)))
+      .filter((n) => Array.isArray(n?.dependsOn) && n.dependsOn.some((d) => gateIds.has(d)))
       .map((n) => n.id)
       .filter(Boolean);
-    const deps = verifyIds.length > 0 ? verifyIds : tasks.map((t) => t.id).filter(Boolean);
+    const deps = verifyIds.length > 0 ? verifyIds : [...gateIds];
     const currentDeps = Array.isArray(integrateNode?.dependsOn) ? integrateNode.dependsOn.map(String) : [];
     const desiredSig = deps.slice().sort().join("|");
     const currentSig = currentDeps.slice().sort().join("|");
