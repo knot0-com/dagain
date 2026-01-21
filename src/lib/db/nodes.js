@@ -341,6 +341,38 @@ export async function applyResult({ dbPath, nodeId, runId, result, nowIso, defau
     }
   }
 
+  const setStatusRaw = result?.next?.setStatus ?? [];
+  const setStatus = Array.isArray(setStatusRaw) ? setStatusRaw : [];
+  for (const entry of setStatus) {
+    if (!entry || typeof entry !== "object") continue;
+    const idRaw =
+      typeof entry.id === "string" ? entry.id : typeof entry.nodeId === "string" ? entry.nodeId : typeof entry.node_id === "string" ? entry.node_id : "";
+    const targetId = String(idRaw || "").trim();
+    if (!targetId) continue;
+
+    const desired = normalizeStatus(entry.status);
+    const allowed = desired === "open" || desired === "done" || desired === "failed" || desired === "needs_human";
+    if (!allowed) continue;
+
+    const isOpen = desired === "open";
+    const isTerminal = desired === "done" || desired === "failed";
+
+    await sqliteExec(
+      dbPath,
+      `UPDATE nodes\n` +
+        `SET status=${sqlQuote(desired)},\n` +
+        `    attempts=${isOpen ? "0" : "attempts"},\n` +
+        `    checkpoint_json=${isOpen ? "NULL" : "checkpoint_json"},\n` +
+        `    lock_run_id=NULL,\n` +
+        `    lock_started_at=NULL,\n` +
+        `    lock_pid=NULL,\n` +
+        `    lock_host=NULL,\n` +
+        `    completed_at=${isOpen ? "NULL" : isTerminal ? sqlQuote(now) : "completed_at"},\n` +
+        `    updated_at=${sqlQuote(now)}\n` +
+        `WHERE id=${sqlQuote(targetId)};\n`,
+    );
+  }
+
   if (nextStatus === "failed") {
     const escalationId = `plan-escalate-${nodeId}`;
     const parentId = typeof node.parent_id === "string" && node.parent_id.trim() ? node.parent_id.trim() : null;
