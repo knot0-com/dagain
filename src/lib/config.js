@@ -48,13 +48,14 @@ export function defaultConfig() {
       finalVerifier: "codex",
       researcher: "codex"
     },
-    supervisor: {
-      idleSleepMs: 2000,
-      staleLockSeconds: 3600,
-      autoResetFailedMax: 1,
-      claudeSensitiveFallbackRunner: "codex",
-      multiVerifier: "one",
-    }
+	    supervisor: {
+	      workers: 1,
+	      idleSleepMs: 2000,
+	      staleLockSeconds: 3600,
+	      autoResetFailedMax: 1,
+	      claudeSensitiveFallbackRunner: "codex",
+	      multiVerifier: "one",
+	    }
   };
 }
 

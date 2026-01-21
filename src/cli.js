@@ -38,14 +38,14 @@ Usage:
   choreo [<goal...>] [--color] [--no-color]
   choreo start [<goal...>] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
   choreo init [--force] [--no-templates] [--goal="..."] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
-  choreo goal [--goal="..."] [--max-turns=<n>] [--runner=<name>] [--live] [--no-live] [--color] [--no-color]
-  choreo status
-  choreo run [--once] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
-  choreo resume [--once] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
-  choreo answer [--node=<id>] [--checkpoint=<file>] [--answer="..."] [--no-prompt]
-  choreo kv get [--run] [--node=<id>] --key=<k> [--json]
-  choreo kv put [--run] [--node=<id>] --key=<k> --value="..." [--allow-cross-node-write]
-  choreo kv ls [--run] [--node=<id>] [--prefix=<p>] [--json]
+	  choreo goal [--goal="..."] [--max-turns=<n>] [--runner=<name>] [--live] [--no-live] [--color] [--no-color]
+	  choreo status
+	  choreo run [--once] [--workers=<n>] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
+	  choreo resume [--once] [--workers=<n>] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
+	  choreo answer [--node=<id>] [--checkpoint=<file>] [--answer="..."] [--no-prompt]
+	  choreo kv get [--run] [--node=<id>] --key=<k> [--json]
+	  choreo kv put [--run] [--node=<id>] --key=<k> --value="..." [--allow-cross-node-write]
+	  choreo kv ls [--run] [--node=<id>] [--prefix=<p>] [--json]
   choreo microcall --prompt="..." [--runner=<name>] [--role=<role>] [--store-key=<k>] [--run] [--json]
   choreo stop [--signal=<sig>]
   choreo graph validate
