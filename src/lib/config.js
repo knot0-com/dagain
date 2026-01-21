@@ -24,6 +24,9 @@ export function choreoPaths(rootDir) {
 export function defaultConfig() {
   return {
     version: 1,
+    defaults: {
+      retryPolicy: { maxAttempts: 1 },
+    },
     runners: {
       codex: { cmd: "codex exec --yolo --skip-git-repo-check -" },
       // Note: Claude forbids --dangerously-skip-permissions when running as root/sudo.

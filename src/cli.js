@@ -60,6 +60,18 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function normalizeMaxAttempts(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.floor(n);
+}
+
+function resolveDefaultRetryPolicy(config) {
+  const maxAttempts = normalizeMaxAttempts(config?.defaults?.retryPolicy?.maxAttempts);
+  if (!maxAttempts) return null;
+  return { maxAttempts };
+}
+
 function sqlQuote(value) {
   const s = String(value ?? "");
   return `'${s.replace(/'/g, "''")}'`;
@@ -519,12 +531,17 @@ async function initCommand(rootDir, flags) {
   const schemaSql = await readFile(schemaUrl, "utf8");
   await sqliteExec(paths.dbPath, schemaSql);
   await ensureDepsRequiredStatusColumn({ dbPath: paths.dbPath });
+  const defaultRetryPolicy = resolveDefaultRetryPolicy(config);
+  const defaultRetryPolicyJson = defaultRetryPolicy ? sqlQuote(JSON.stringify(defaultRetryPolicy)) : null;
   const now = nowIso();
   const nowSql = `'${now.replace(/'/g, "''")}'`;
   await sqliteExec(
     paths.dbPath,
     `INSERT OR IGNORE INTO nodes(id, title, type, status, created_at, updated_at)\n` +
-      `VALUES('plan-000','Plan','plan','open',${nowSql},${nowSql});\n`,
+      `VALUES('plan-000','Plan','plan','open',${nowSql},${nowSql});\n` +
+      (defaultRetryPolicyJson
+        ? `UPDATE nodes SET retry_policy_json=${defaultRetryPolicyJson} WHERE id='plan-000';\n`
+        : ""),
   );
 
   if (force || !(await pathExists(paths.graphPath))) {
@@ -1987,7 +2004,15 @@ async function executeNode({ rootDir, paths, config, node, run, activityPath, er
   else if (finalStatus === "checkpoint") await appendLine(activityPath, `[${nowIso()}] checkpoint node=${node.id}`);
   else await appendLine(errorsPath, `[${nowIso()}] fail node=${node.id}`);
 
-  await applyResultDb({ dbPath: paths.dbPath, nodeId: node.id, runId: run, result, nowIso: nowIso() });
+  const defaultRetryPolicy = resolveDefaultRetryPolicy(config);
+  await applyResultDb({
+    dbPath: paths.dbPath,
+    nodeId: node.id,
+    runId: run,
+    result,
+    nowIso: nowIso(),
+    defaultRetryPolicy,
+  });
   const graphAfter = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
   await syncTaskPlan({ paths, graph: graphAfter });
   await appendProgress({ paths, node, run, role, runnerName, result, stdoutPath });
@@ -2096,6 +2121,10 @@ function ensurePlannerScaffolding({ graph, config }) {
   if (tasks.length === 0) return { addedIds, updated };
   const verifyNodes = listVerifyNodes(graph);
 
+  const configuredMaxAttempts = normalizeMaxAttempts(config?.defaults?.retryPolicy?.maxAttempts);
+  const verifyMaxAttempts = configuredMaxAttempts ?? 2;
+  const integrateMaxAttempts = configuredMaxAttempts ?? 2;
+
   const verifierRunners = [...new Set(normalizeRunnerList(config?.roles?.verifier ?? config?.roles?.main ?? []))];
   const multiVerifier = String(config?.supervisor?.multiVerifier || "one").toLowerCase().trim() === "all";
 
@@ -2123,7 +2152,7 @@ function ensurePlannerScaffolding({ graph, config }) {
           acceptance: Array.isArray(task.acceptance) ? task.acceptance : [],
           verify: Array.isArray(task.verify) ? task.verify : [],
           attempts: 0,
-          retryPolicy: { maxAttempts: 2 },
+          retryPolicy: { maxAttempts: verifyMaxAttempts },
           createdAt: now,
           updatedAt: now,
         });
@@ -2148,7 +2177,7 @@ function ensurePlannerScaffolding({ graph, config }) {
       acceptance: Array.isArray(task.acceptance) ? task.acceptance : [],
       verify: Array.isArray(task.verify) ? task.verify : [],
       attempts: 0,
-      retryPolicy: { maxAttempts: 2 },
+      retryPolicy: { maxAttempts: verifyMaxAttempts },
       createdAt: now,
       updatedAt: now,
     });
@@ -2179,7 +2208,7 @@ function ensurePlannerScaffolding({ graph, config }) {
       acceptance: ["Integrates changes and ensures the repo is in a consistent, buildable state"],
       verify: [],
       attempts: 0,
-      retryPolicy: { maxAttempts: 2 },
+      retryPolicy: { maxAttempts: integrateMaxAttempts },
       createdAt: now,
       updatedAt: now,
     });

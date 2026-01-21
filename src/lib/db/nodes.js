@@ -249,7 +249,7 @@ export async function claimNode({ dbPath, nodeId, runId, pid, host, nowIso }) {
   return Number.isFinite(changes) && changes === 1;
 }
 
-export async function applyResult({ dbPath, nodeId, runId, result, nowIso }) {
+export async function applyResult({ dbPath, nodeId, runId, result, nowIso, defaultRetryPolicy = null }) {
   const now = typeof nowIso === "string" && nowIso.trim() ? nowIso : new Date().toISOString();
   const nodeRows = await sqliteQueryJson(
     dbPath,
@@ -311,7 +311,7 @@ export async function applyResult({ dbPath, nodeId, runId, result, nowIso }) {
     const ownershipJson = safeJsonStringify(spec?.ownership ?? []);
     const acceptanceJson = safeJsonStringify(spec?.acceptance ?? []);
     const verifyJson = safeJsonStringify(spec?.verify ?? []);
-    const retryPolicyJson = safeJsonStringify(spec?.retryPolicy ?? { maxAttempts: 3 });
+    const retryPolicyJson = safeJsonStringify(spec?.retryPolicy ?? defaultRetryPolicy ?? { maxAttempts: 3 });
 
     await sqliteExec(
       dbPath,
@@ -349,17 +349,20 @@ export async function applyResult({ dbPath, nodeId, runId, result, nowIso }) {
       { nodeId, key: "out.last_stdout_path" },
       { nodeId, key: "out.last_result_path" },
     ]);
+    const retryPolicyJson = safeJsonStringify(defaultRetryPolicy ?? { maxAttempts: 3 });
 
     await sqliteExec(
       dbPath,
       `INSERT OR IGNORE INTO nodes(\n` +
         `  id, title, type, status, parent_id,\n` +
         `  inputs_json,\n` +
+        `  retry_policy_json,\n` +
         `  created_at, updated_at\n` +
         `)\n` +
         `VALUES(\n` +
         `  ${sqlQuote(escalationId)}, ${sqlQuote(`Escalate ${nodeId}`)}, 'plan', 'open', ${parentId ? sqlQuote(parentId) : "NULL"},\n` +
         `  ${sqlQuote(inputsJson)},\n` +
+        `  ${sqlQuote(retryPolicyJson)},\n` +
         `  ${sqlQuote(now)}, ${sqlQuote(now)}\n` +
         `);\n` +
         `INSERT OR IGNORE INTO deps(node_id, depends_on_id, required_status)\n` +
