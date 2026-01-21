@@ -76,6 +76,45 @@ export async function selectNextRunnableNode({ dbPath, nowIso }) {
   return rows[0] || null;
 }
 
+export async function selectRunnableCandidates({ dbPath, nowIso, limit = 50 }) {
+  const now = typeof nowIso === "string" && nowIso.trim() ? nowIso : new Date().toISOString();
+  const limitNum = Number(limit);
+  const limitInt = Number.isFinite(limitNum) && limitNum > 0 ? Math.floor(limitNum) : 50;
+  const rows = await sqliteQueryJson(
+    dbPath,
+    `SELECT n.*\n` +
+      `FROM nodes n\n` +
+      `WHERE n.status='open'\n` +
+      `  AND (n.blocked_until IS NULL OR n.blocked_until <= ${sqlQuote(now)})\n` +
+      `  AND n.lock_run_id IS NULL\n` +
+      `  AND NOT EXISTS (\n` +
+      `    SELECT 1\n` +
+      `    FROM deps d\n` +
+      `    JOIN nodes dep ON dep.id = d.depends_on_id\n` +
+      `    WHERE d.node_id = n.id AND (\n` +
+      `      CASE COALESCE(NULLIF(lower(d.required_status), ''), 'done')\n` +
+      `        WHEN 'terminal' THEN dep.status NOT IN ('done', 'failed')\n` +
+      `        ELSE dep.status <> 'done'\n` +
+      `      END\n` +
+      `    )\n` +
+      `  )\n` +
+      `ORDER BY\n` +
+      `  CASE lower(n.type)\n` +
+      `    WHEN 'verify' THEN 0\n` +
+      `    WHEN 'task' THEN 1\n` +
+      `    WHEN 'plan' THEN 2\n` +
+      `    WHEN 'epic' THEN 2\n` +
+      `    WHEN 'integrate' THEN 3\n` +
+      `    WHEN 'final_verify' THEN 4\n` +
+      `    WHEN 'final-verify' THEN 4\n` +
+      `    ELSE 100\n` +
+      `  END,\n` +
+      `  n.id\n` +
+      `LIMIT ${String(limitInt)};\n`,
+  );
+  return rows;
+}
+
 export async function getNode({ dbPath, nodeId }) {
   const rows = await sqliteQueryJson(dbPath, `SELECT * FROM nodes WHERE id=${sqlQuote(nodeId)} LIMIT 1;\n`);
   const row = rows[0] || null;
