@@ -153,6 +153,7 @@ function mergeEnv(a, b) {
 
 function choreoRunnerEnv(paths, { nodeId, runId, parentNodeId = "" }) {
   const choreoBin = fileURLToPath(new URL("../bin/choreo.js", import.meta.url));
+  const shellVerifier = fileURLToPath(new URL("../scripts/shell-verifier.js", import.meta.url));
   return {
     CHOREO_DB: paths.dbPath,
     CHOREO_NODE_ID: nodeId,
@@ -162,6 +163,7 @@ function choreoRunnerEnv(paths, { nodeId, runId, parentNodeId = "" }) {
     CHOREO_CHECKPOINTS_DIR: paths.checkpointsDir,
     CHOREO_RUNS_DIR: paths.runsDir,
     CHOREO_BIN: choreoBin,
+    CHOREO_SHELL_VERIFIER: shellVerifier,
   };
 }
 
@@ -2125,6 +2127,8 @@ function ensurePlannerScaffolding({ graph, config }) {
   const verifyMaxAttempts = configuredMaxAttempts ?? 2;
   const integrateMaxAttempts = configuredMaxAttempts ?? 2;
 
+  const defaultVerifyRunner = String(config?.defaults?.verifyRunner || "").trim();
+
   const verifierRunners = [...new Set(normalizeRunnerList(config?.roles?.verifier ?? config?.roles?.main ?? []))];
   const multiVerifier = String(config?.supervisor?.multiVerifier || "one").toLowerCase().trim() === "all";
 
@@ -2173,6 +2177,7 @@ function ensurePlannerScaffolding({ graph, config }) {
       type: "verify",
       status: "open",
       dependsOn: [task.id],
+      ...(defaultVerifyRunner ? { runner: defaultVerifyRunner } : {}),
       ownership: Array.isArray(task.ownership) ? task.ownership : [],
       acceptance: Array.isArray(task.acceptance) ? task.acceptance : [],
       verify: Array.isArray(task.verify) ? task.verify : [],

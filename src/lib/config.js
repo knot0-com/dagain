@@ -26,8 +26,10 @@ export function defaultConfig() {
     version: 1,
     defaults: {
       retryPolicy: { maxAttempts: 1 },
+      verifyRunner: "shellVerify",
     },
     runners: {
+      shellVerify: { cmd: 'node "$CHOREO_SHELL_VERIFIER"' },
       codex: { cmd: "codex exec --yolo --skip-git-repo-check -" },
       // Note: Claude forbids --dangerously-skip-permissions when running as root/sudo.
       // choreo strips that flag automatically in those contexts.
