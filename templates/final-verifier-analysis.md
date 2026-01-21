@@ -64,6 +64,7 @@ KV cheat sheet:
 - Assume YOLO/auto-approval for normal verification commands. Do not checkpoint just to ask permission to run routine checks.
 - Use `status: "success"` only if the goal is genuinely complete and verified.
 - If gaps remain, use `status: "fail"` and propose follow-up tasks in `next.addNodes`.
+- **Long-running commands:** Do not re-run expensive commands that already ran in upstream `verify-*` nodes. If execution is truly missing, propose a new `verify-*` node in `next.addNodes` (runner: `shellVerify`) rather than running long jobs from this node.
 - If a human decision is required, set `status` to `"checkpoint"` and include a `checkpoint` object (exactly one question).
 - If `Resume Context` includes a human answer, treat it as authoritative and proceed; do not re-ask the same question.
 

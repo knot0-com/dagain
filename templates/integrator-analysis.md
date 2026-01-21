@@ -62,6 +62,7 @@ KV cheat sheet:
 - Output exactly one machine-parseable JSON object inside **`<result>...</result>`**.
 - No prose outside the `<result>` block.
 - Assume YOLO/auto-approval for normal *analysis* checks (file existence, lightweight parses). Do not checkpoint just to ask permission to run routine commands.
+- **Long-running commands:** Do not re-run expensive commands that already ran in upstream `verify-*` nodes. If execution is truly missing, propose a new `verify-*` node in `next.addNodes` (runner: `shellVerify`) rather than running long jobs from this node.
 - If a human decision is required, set `status` to `"checkpoint"` and include a `checkpoint` object (exactly one question).
 - If `Resume Context` includes a human answer, treat it as authoritative and proceed; do not re-ask the same question.
 
