@@ -154,10 +154,11 @@ function mergeEnv(a, b) {
   return Object.keys(out).length > 0 ? out : null;
 }
 
-function choreoRunnerEnv(paths, { nodeId, runId, parentNodeId = "" }) {
+function choreoRunnerEnv(paths, { nodeId, runId, parentNodeId = "", runMode = "" }) {
   const choreoBin = fileURLToPath(new URL("../bin/choreo.js", import.meta.url));
   const shellVerifier = fileURLToPath(new URL("../scripts/shell-verifier.js", import.meta.url));
   const shellMerge = fileURLToPath(new URL("../scripts/shell-merge.js", import.meta.url));
+  const mode = String(runMode || "").trim();
   return {
     CHOREO_DB: paths.dbPath,
     CHOREO_NODE_ID: nodeId,
@@ -169,6 +170,7 @@ function choreoRunnerEnv(paths, { nodeId, runId, parentNodeId = "" }) {
     CHOREO_BIN: choreoBin,
     CHOREO_SHELL_VERIFIER: shellVerifier,
     CHOREO_SHELL_MERGE: shellMerge,
+    CHOREO_RUN_MODE: mode,
   };
 }
 
@@ -437,6 +439,56 @@ function runId() {
   return `${stamp}-${rand}`;
 }
 
+function normalizeRunMode(value) {
+  const mode = String(value || "").toLowerCase().trim();
+  if (mode === "analysis") return "analysis";
+  if (mode === "coding" || mode === "code") return "coding";
+  return "auto";
+}
+
+function inferRunMode(goalText, config) {
+  const raw = String(goalText || "");
+
+  // 1) Explicit directive inside GOAL.md.
+  const explicit = raw.match(/^\s*(?:run\s*mode|mode)\s*:\s*(analysis|coding)\s*$/im);
+  if (explicit) return String(explicit[1] || "").toLowerCase();
+
+  // 2) Config override.
+  const override = normalizeRunMode(config?.supervisor?.runMode);
+  if (override === "analysis" || override === "coding") return override;
+
+  // 3) Heuristic keyword scoring on the goal text.
+  const text = raw.toLowerCase();
+  const analysisHints = [
+    "analysis",
+    "analyz",
+    "research",
+    "hypothesis",
+    "report",
+    "dataset",
+    "parquet",
+    "csv",
+    "plot",
+    "metrics",
+    "alpha",
+    "trades",
+    "orderbook",
+    "microstructure",
+  ];
+  const codingHints = ["refactor", "implement", "bug", "fix", "feature", "build", "compile", "test", "ci", "merge", "pr", "release"];
+
+  let scoreAnalysis = 0;
+  for (const h of analysisHints) if (text.includes(h)) scoreAnalysis += 1;
+  let scoreCoding = 0;
+  for (const h of codingHints) if (text.includes(h)) scoreCoding += 1;
+
+  if (/\.(parquet|csv|jsonl|feather)\b/i.test(raw)) scoreAnalysis += 2;
+  if (/[\\/](data|datasets|raw|artifacts)[\\/]/i.test(raw)) scoreAnalysis += 2;
+
+  if (scoreAnalysis === 0 && scoreCoding === 0) return "coding";
+  return scoreAnalysis >= scoreCoding ? "analysis" : "coding";
+}
+
 function normalizeWorktreeMode(value) {
   const mode = String(value || "").toLowerCase().trim();
   if (mode === "always") return "always";
@@ -534,7 +586,16 @@ async function resolveTemplate(rootDir, role) {
 async function copyTemplates(rootDir, { force = false } = {}) {
   const { templatesDir } = choreoPaths(rootDir);
   await ensureDir(templatesDir);
-  const roles = ["planner", "executor", "verifier", "integrator", "final-verifier", "goal-refiner"];
+  const roles = [
+    "planner",
+    "executor",
+    "verifier",
+    "integrator",
+    "integrator-analysis",
+    "final-verifier",
+    "final-verifier-analysis",
+    "goal-refiner",
+  ];
   await Promise.all(
     roles.map(async (role) => {
       const src = await readBuiltInTemplate(role);
@@ -2394,14 +2455,22 @@ async function executeNode({
   const stdoutPath = path.join(runDir, "stdout.log");
   const checkpointOutPath = path.join(paths.checkpointsDir, `checkpoint-${run}.json`);
 
-  const templateName = role === "finalVerifier" ? "final-verifier" : role;
-  const template = await resolveTemplate(rootDir, templateName);
   const packetMode = String(config?.supervisor?.packetMode || "full").toLowerCase().trim() || "full";
   const thinPacket = packetMode === "thin";
   const includePlanningDrafts = !thinPacket || role === "planner" || role === "finalVerifier";
 
   const goalDraftMax = thinPacket && role !== "planner" && role !== "finalVerifier" ? 4_000 : 20_000;
   const goalDraft = await readTextTruncated(paths.goalPath, goalDraftMax);
+  const runMode = inferRunMode(goalDraft, config);
+  const templateName =
+    runMode === "analysis" && role === "integrator"
+      ? "integrator-analysis"
+      : runMode === "analysis" && role === "finalVerifier"
+        ? "final-verifier-analysis"
+        : role === "finalVerifier"
+          ? "final-verifier"
+          : role;
+  const template = await resolveTemplate(rootDir, templateName);
   const taskPlanPath = path.join(paths.memoryDir, "task_plan.md");
   const findingsPath = path.join(paths.memoryDir, "findings.md");
   const progressPath = path.join(paths.memoryDir, "progress.md");
@@ -2412,10 +2481,12 @@ async function executeNode({
   const findingsPathForPacket = runnerCwd === paths.rootDir ? path.relative(paths.rootDir, findingsPath) : findingsPath;
   const progressPathForPacket = runnerCwd === paths.rootDir ? path.relative(paths.rootDir, progressPath) : progressPath;
   const nodeResume = formatNodeResume(node);
+  const nodeInputs = await formatNodeInputs({ dbPath: paths.dbPath, node });
   const packet = renderTemplate(template, {
     REPO_ROOT: runnerCwd,
     GOAL_PATH: paths.goalPath,
     RUN_ID: run,
+    RUN_MODE: runMode,
     GOAL_DRAFT: goalDraft,
     TASK_PLAN_PATH: taskPlanPathForPacket,
     FINDINGS_PATH: findingsPathForPacket,
@@ -2424,6 +2495,7 @@ async function executeNode({
     FINDINGS_DRAFT: findingsDraft,
     PROGRESS_DRAFT: progressDraft,
     NODE_RESUME: nodeResume,
+    NODE_INPUTS: nodeInputs,
     NODE_ID: node.id,
     NODE_TITLE: node.title || "",
     NODE_TYPE: node.type || "",
@@ -2458,7 +2530,7 @@ async function executeNode({
   const liveLinePrefix = consoleUi.c.gray(multiWorker ? `│${node.id}│` : "│") + " ";
   const runnerEnv = mergeEnv(
     mergeEnv(resolveRunnerEnv({ runnerName, runner, cwd: runnerCwd, paths }), identityEnv),
-    choreoRunnerEnv(paths, { nodeId: node.id, runId: run }),
+    choreoRunnerEnv(paths, { nodeId: node.id, runId: run, runMode }),
   );
   await ensureRunnerTmpDir(runnerEnv);
   if (runnerName === "claude")
@@ -2540,6 +2612,41 @@ async function executeNode({
   else await appendLine(errorsPath, `[${nowIso()}] fail node=${node.id}`);
 
   const applyOutcome = async () => {
+    const attempt = Number(node?.attempts || 0) + 1;
+    const summary = typeof result?.summary === "string" ? result.summary : "";
+    const stdoutRel = path.relative(paths.rootDir, stdoutPath);
+    const resultRel = path.relative(paths.rootDir, resultPath);
+    const errSummary =
+      finalStatus === "success"
+        ? ""
+        : summary.trim() ||
+          (Array.isArray(result?.errors) && result.errors.length > 0
+            ? String(result.errors[0] || "").trim()
+            : "");
+
+    await kvPut({ dbPath: paths.dbPath, nodeId: node.id, key: "out.summary", valueText: summary, runId: run, attempt, nowIso: nowIso() });
+    await kvPut({
+      dbPath: paths.dbPath,
+      nodeId: node.id,
+      key: "out.last_stdout_path",
+      valueText: stdoutRel,
+      runId: run,
+      attempt,
+      nowIso: nowIso(),
+    });
+    await kvPut({
+      dbPath: paths.dbPath,
+      nodeId: node.id,
+      key: "out.last_result_path",
+      valueText: resultRel,
+      runId: run,
+      attempt,
+      nowIso: nowIso(),
+    });
+    if (errSummary) {
+      await kvPut({ dbPath: paths.dbPath, nodeId: node.id, key: "err.summary", valueText: errSummary, runId: run, attempt, nowIso: nowIso() });
+    }
+
     const defaultRetryPolicy = resolveDefaultRetryPolicy(config);
     await applyResultDb({
       dbPath: paths.dbPath,
@@ -2590,6 +2697,65 @@ function formatNodeResume(node) {
   if (answer) lines.push(`- answer: ${answer}`);
   if (responsePath) lines.push(`- response file: ${responsePath}`);
   return lines.join("\n");
+}
+
+function normalizeNodeInputSpec(value, { defaultNodeId }) {
+  if (typeof value === "string") {
+    const key = value.trim();
+    if (!key) return null;
+    return { nodeId: defaultNodeId, key, as: "" };
+  }
+  if (!value || typeof value !== "object") return null;
+  const nodeIdRaw = typeof value.nodeId === "string" ? value.nodeId : typeof value.node_id === "string" ? value.node_id : "";
+  const keyRaw = typeof value.key === "string" ? value.key : "";
+  const asRaw = typeof value.as === "string" ? value.as : typeof value.alias === "string" ? value.alias : "";
+  const nodeId = String(nodeIdRaw || "").trim() || defaultNodeId;
+  const key = String(keyRaw || "").trim();
+  const as = String(asRaw || "").trim();
+  if (!nodeId || !key) return null;
+  return { nodeId, key, as };
+}
+
+function formatNodeInputPreview(valueText, { maxChars = 2000 } = {}) {
+  const n = Number(maxChars);
+  const limit = Number.isFinite(n) && n > 0 ? Math.floor(n) : 2000;
+  const normalized = String(valueText || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  if (normalized.length <= limit) return normalized;
+  return normalized.slice(0, Math.max(0, limit - 1)) + "…";
+}
+
+async function formatNodeInputs({ dbPath, node }) {
+  const specsRaw = node?.inputs ?? [];
+  const specs = Array.isArray(specsRaw) ? specsRaw : [];
+  if (!dbPath) return "- (none)";
+  if (!node?.id) return "- (none)";
+  if (specs.length === 0) return "- (none)";
+
+  const out = [];
+  for (const specRaw of specs) {
+    const spec = normalizeNodeInputSpec(specRaw, { defaultNodeId: node.id });
+    if (!spec) continue;
+    const label = spec.as || spec.key;
+    const ref = `${spec.nodeId}:${spec.key}`;
+    let preview = "";
+    try {
+      const row = await kvGet({ dbPath, nodeId: spec.nodeId, key: spec.key });
+      if (row && typeof row.value_text === "string") preview = formatNodeInputPreview(row.value_text);
+      if (preview && preview.length > 0) {
+        out.push(`- ${label}: ${ref} — ${preview}`);
+      } else {
+        out.push(`- ${label}: ${ref}`);
+      }
+      if (row && typeof row.artifact_path === "string" && row.artifact_path.trim()) {
+        out.push(`  - artifact: ${row.artifact_path.trim()}`);
+      }
+    } catch {
+      out.push(`- ${label}: ${ref}`);
+    }
+  }
+
+  return out.length > 0 ? out.join("\n") : "- (none)";
 }
 
 function stableCountsSig(counts) {

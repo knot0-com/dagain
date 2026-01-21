@@ -415,8 +415,23 @@ export async function applyResult({ dbPath, nodeId, runId, result, nowIso, defau
   }
 
   if (nextStatus === "failed") {
-    const escalationId = `plan-escalate-${nodeId}`;
-    const parentId = typeof node.parent_id === "string" && node.parent_id.trim() ? node.parent_id.trim() : null;
+    const nodeParentId = typeof node.parent_id === "string" && node.parent_id.trim() ? node.parent_id.trim() : null;
+
+    const isEscalationNode = nodeId.startsWith("plan-escalate-");
+    const escalationSubjectId = isEscalationNode && nodeParentId ? nodeParentId : nodeId;
+    const escalationId = `plan-escalate-${escalationSubjectId}`;
+    const dependsOnId = isEscalationNode && nodeParentId ? nodeId : escalationSubjectId;
+
+    let parentId = nodeParentId;
+    if (isEscalationNode && nodeParentId) {
+      const parentRows = await sqliteQueryJson(
+        dbPath,
+        `SELECT parent_id FROM nodes WHERE id=${sqlQuote(nodeParentId)} LIMIT 1;\n`,
+      );
+      const parentRow = parentRows[0] || null;
+      parentId = typeof parentRow?.parent_id === "string" && parentRow.parent_id.trim() ? parentRow.parent_id.trim() : null;
+    }
+
     const inputsJson = safeJsonStringify([
       { nodeId, key: "err.summary" },
       { nodeId, key: "out.last_stdout_path" },
@@ -439,7 +454,7 @@ export async function applyResult({ dbPath, nodeId, runId, result, nowIso, defau
         `  ${sqlQuote(now)}, ${sqlQuote(now)}\n` +
         `);\n` +
         `INSERT OR IGNORE INTO deps(node_id, depends_on_id, required_status)\n` +
-        `VALUES(${sqlQuote(escalationId)}, ${sqlQuote(nodeId)}, 'terminal');\n`,
+        `VALUES(${sqlQuote(escalationId)}, ${sqlQuote(dependsOnId)}, 'terminal');\n`,
     );
   }
 }

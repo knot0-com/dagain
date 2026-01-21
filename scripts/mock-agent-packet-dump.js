@@ -27,7 +27,7 @@ const nodeType = extract(packet, /^- Type:\s*(.+)\s*$/m);
 await fs.writeFile("packet_seen.md", packet, "utf8");
 await fs.writeFile(
   "packet_meta.json",
-  JSON.stringify({ marker, nodeId, nodeType, length: packet.length }, null, 2) + "\n",
+  JSON.stringify({ marker, nodeId, nodeType, length: packet.length, runMode: process.env.CHOREO_RUN_MODE || "" }, null, 2) + "\n",
   "utf8",
 );
 
@@ -45,4 +45,3 @@ result({
   errors: [],
   confidence: 1,
 });
-

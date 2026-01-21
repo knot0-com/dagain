@@ -47,6 +47,9 @@ KV cheat sheet:
 ## Resume Context (if any)
 {{NODE_RESUME}}
 
+## Node Inputs
+{{NODE_INPUTS}}
+
 ## Work Node
 - ID: {{NODE_ID}}
 - Title: {{NODE_TITLE}}

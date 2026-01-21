@@ -57,6 +57,27 @@ Project state is stored in:
   - Adds an `integrate-*` node (if missing)
   - Adds a `final-verify-*` node (if missing)
 
+## Run Modes (analysis vs coding)
+
+Choreo infers a coarse **run mode** from `GOAL.md`:
+
+- `analysis` — data/metrics/report oriented runs (verify artifacts; avoid unrelated git merges/repo-wide test suites)
+- `coding` — code-change oriented runs (integration focuses on repo-wide correctness checks)
+
+### Overrides
+
+- In `GOAL.md`, add a line: `Run mode: analysis` or `Run mode: coding`
+- In `.choreo/config.json`, set: `supervisor.runMode` to `analysis` or `coding`
+
+### How runners see it
+
+- Template var: `{{RUN_MODE}}` (included in node packets)
+- Env var: `CHOREO_RUN_MODE` (available to runner processes)
+
+Choreo ships mode-specific templates for analysis runs:
+- `.choreo/templates/integrator-analysis.md`
+- `.choreo/templates/final-verifier-analysis.md`
+
 ## Multiple Runners per Role
 
 - `.choreo/config.json` roles can be a string or a list of runner names:
