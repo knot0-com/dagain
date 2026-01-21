@@ -1388,7 +1388,6 @@ async function runCommand(rootDir, flags) {
           });
 
         inFlight.set(node.id, promise);
-        locks.acquire(node.id, { resources: locks.normalizeResources(node.ownership), mode: locks.modeForRole(resolveNodeRole(node)) });
         return promise;
       };
 
@@ -1452,6 +1451,11 @@ async function runCommand(rootDir, flags) {
 
             const node = await getNode({ dbPath: paths.dbPath, nodeId });
             if (!node) continue;
+
+            const role = resolveNodeRole(node);
+            const resources = locks.normalizeResources(node.ownership);
+            const mode = locks.modeForRole(role);
+            if (!locks.acquire(node.id, { resources, mode })) continue;
 
             ui.event("select", ui.formatNode(node));
             await appendLine(activityPath, `[${nowIso()}] select ${node.id}`);

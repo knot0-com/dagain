@@ -32,8 +32,12 @@ const cwd = process.cwd();
 
 const sleepMsEnv = Number(process.env.MOCK_SLEEP_MS || "");
 const sleepMs = Number.isFinite(sleepMsEnv) && sleepMsEnv >= 0 ? sleepMsEnv : 400;
+const scenario = String(process.env.MOCK_SLEEP_SCENARIO || "").trim().toLowerCase() || "disjoint";
 
 if (role === "planner") {
+  const conflict = scenario === "conflict";
+  const ownershipA = conflict ? ["shared.txt"] : ["a.txt"];
+  const ownershipB = conflict ? ["shared.txt"] : ["b.txt"];
   result({
     version: 1,
     role: "planner",
@@ -47,7 +51,7 @@ if (role === "planner") {
           type: "task",
           status: "open",
           dependsOn: [],
-          ownership: ["a.txt"],
+          ownership: ownershipA,
           acceptance: ["Creates a.txt with known content"],
           verify: ["cat a.txt"],
           retryPolicy: { maxAttempts: 1 },
@@ -58,7 +62,7 @@ if (role === "planner") {
           type: "task",
           status: "open",
           dependsOn: [],
-          ownership: ["b.txt"],
+          ownership: ownershipB,
           acceptance: ["Creates b.txt with known content"],
           verify: ["cat b.txt"],
           retryPolicy: { maxAttempts: 1 },
@@ -72,9 +76,15 @@ if (role === "planner") {
   });
 } else if (role === "executor") {
   await sleep(sleepMs);
-  if (nodeId === "task-a") await fs.writeFile(path.join(cwd, "a.txt"), "a\n", "utf8");
-  else if (nodeId === "task-b") await fs.writeFile(path.join(cwd, "b.txt"), "b\n", "utf8");
-  else await fs.writeFile(path.join(cwd, `${nodeId}.txt`), `${nodeId}\n`, "utf8");
+  if (scenario === "conflict") {
+    const target = path.join(cwd, "shared.txt");
+    const line = nodeId === "task-a" ? "a\n" : nodeId === "task-b" ? "b\n" : `${nodeId}\n`;
+    await fs.writeFile(target, line, { encoding: "utf8", flag: "a" });
+  } else {
+    if (nodeId === "task-a") await fs.writeFile(path.join(cwd, "a.txt"), "a\n", "utf8");
+    else if (nodeId === "task-b") await fs.writeFile(path.join(cwd, "b.txt"), "b\n", "utf8");
+    else await fs.writeFile(path.join(cwd, `${nodeId}.txt`), `${nodeId}\n`, "utf8");
+  }
 
   result({
     version: 1,
@@ -125,4 +135,3 @@ if (role === "planner") {
     confidence: 0,
   });
 }
-
