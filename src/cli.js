@@ -69,6 +69,15 @@ function normalizeMaxAttempts(value) {
   return Math.floor(n);
 }
 
+function stableJsonSig(value, fallback = "[]") {
+  try {
+    const serialized = JSON.stringify(value ?? null);
+    return typeof serialized === "string" ? serialized : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function resolveDefaultRetryPolicy(config) {
   const maxAttempts = normalizeMaxAttempts(config?.defaults?.retryPolicy?.maxAttempts);
   if (!maxAttempts) return null;
@@ -2164,10 +2173,12 @@ async function ensureMergeNodeForTaskDb({ paths, config, taskId }) {
 async function ensurePlannerScaffoldingDb({ paths, config }) {
   const graph = await loadWorkgraphFromDb({ dbPath: paths.dbPath });
   const beforeDepsSigById = new Map();
+  const beforeInputsSigById = new Map();
   for (const node of Array.isArray(graph?.nodes) ? graph.nodes : []) {
     if (!node?.id) continue;
     const deps = Array.isArray(node?.dependsOn) ? node.dependsOn : [];
     beforeDepsSigById.set(node.id, deps.slice().sort().join("|"));
+    beforeInputsSigById.set(node.id, stableJsonSig(Array.isArray(node?.inputs) ? node.inputs : []));
   }
 
   const scaffold = ensurePlannerScaffolding({ graph, config });
@@ -2220,6 +2231,18 @@ async function ensurePlannerScaffoldingDb({ paths, config }) {
       await sqliteExec(paths.dbPath, `INSERT OR IGNORE INTO deps(node_id, depends_on_id) VALUES(${sqlQuote(node.id)}, ${sqlQuote(dep)});\n`);
     }
     await sqliteExec(paths.dbPath, `UPDATE nodes SET updated_at=${sqlQuote(nowIso())} WHERE id=${sqlQuote(node.id)};\n`);
+  }
+
+  for (const node of Array.isArray(graph?.nodes) ? graph.nodes : []) {
+    if (!node?.id) continue;
+    if (!beforeInputsSigById.has(node.id)) continue;
+    const beforeSig = beforeInputsSigById.get(node.id) || "[]";
+    const nextSig = stableJsonSig(Array.isArray(node?.inputs) ? node.inputs : []);
+    if (beforeSig === nextSig) continue;
+    await sqliteExec(
+      paths.dbPath,
+      `UPDATE nodes SET inputs_json=${sqlQuote(nextSig)}, updated_at=${sqlQuote(nowIso())} WHERE id=${sqlQuote(node.id)};\n`,
+    );
   }
 
   return scaffold;
@@ -2991,6 +3014,16 @@ function ensurePlannerScaffolding({ graph, config }) {
       .map((n) => n.id)
       .filter(Boolean);
     const deps = verifyIds.length > 0 ? verifyIds : [...gateIds];
+    const taskInputs = tasks
+      .map((t) => String(t?.id || "").trim())
+      .filter(Boolean)
+      .sort()
+      .map((taskId) => ({ nodeId: taskId, key: "out.summary", as: `${taskId}.summary` }));
+    const verifyInputs = verifyIds
+      .slice()
+      .sort()
+      .map((verifyId) => ({ nodeId: verifyId, key: "out.summary", as: `${verifyId}.summary` }));
+    const inputs = [...taskInputs, ...verifyInputs];
     const id = ensureUniqueNodeId("integrate-000", ids);
     ids.add(id);
     integrateId = id;
@@ -3001,6 +3034,7 @@ function ensurePlannerScaffolding({ graph, config }) {
       type: "integrate",
       status: "open",
       dependsOn: deps,
+      inputs,
       ownership: unionOwnership(tasks),
       acceptance: ["Integrates changes and ensures the repo is in a consistent, buildable state"],
       verify: [],
@@ -3023,11 +3057,23 @@ function ensurePlannerScaffolding({ graph, config }) {
       .map((n) => n.id)
       .filter(Boolean);
     const deps = verifyIds.length > 0 ? verifyIds : [...gateIds];
+    const taskInputs = tasks
+      .map((t) => String(t?.id || "").trim())
+      .filter(Boolean)
+      .sort()
+      .map((taskId) => ({ nodeId: taskId, key: "out.summary", as: `${taskId}.summary` }));
+    const verifyInputs = verifyIds
+      .slice()
+      .sort()
+      .map((verifyId) => ({ nodeId: verifyId, key: "out.summary", as: `${verifyId}.summary` }));
+    const desiredInputsSig = stableJsonSig([...taskInputs, ...verifyInputs]);
+    const currentInputsSig = stableJsonSig(Array.isArray(integrateNode?.inputs) ? integrateNode.inputs : []);
     const currentDeps = Array.isArray(integrateNode?.dependsOn) ? integrateNode.dependsOn.map(String) : [];
     const desiredSig = deps.slice().sort().join("|");
     const currentSig = currentDeps.slice().sort().join("|");
-    if (desiredSig !== currentSig) {
+    if (desiredSig !== currentSig || desiredInputsSig !== currentInputsSig) {
       integrateNode.dependsOn = deps;
+      integrateNode.inputs = JSON.parse(desiredInputsSig);
       integrateNode.updatedAt = now;
       updated = true;
     }
@@ -3043,6 +3089,7 @@ function ensurePlannerScaffolding({ graph, config }) {
       type: "final_verify",
       status: "open",
       dependsOn: integrateId ? [integrateId] : [],
+      inputs: integrateId ? [{ nodeId: integrateId, key: "out.summary", as: "integrate.summary" }] : [],
       ownership: [],
       acceptance: ["All work is complete and verified against GOAL.md"],
       verify: [],
@@ -3053,6 +3100,23 @@ function ensurePlannerScaffolding({ graph, config }) {
     });
     addedIds.push(id);
     updated = true;
+  } else {
+    const finalNode = finals[0];
+    if (finalNode && normalizeStatus(finalNode.status) === "open") {
+      const desiredDeps = integrateId ? [integrateId] : [];
+      const currentDeps = Array.isArray(finalNode.dependsOn) ? finalNode.dependsOn.map(String) : [];
+      const desiredDepsSig = desiredDeps.slice().sort().join("|");
+      const currentDepsSig = currentDeps.slice().sort().join("|");
+      const desiredInputs = integrateId ? [{ nodeId: integrateId, key: "out.summary", as: "integrate.summary" }] : [];
+      const desiredInputsSig = stableJsonSig(desiredInputs);
+      const currentInputsSig = stableJsonSig(Array.isArray(finalNode.inputs) ? finalNode.inputs : []);
+      if (desiredDepsSig !== currentDepsSig || desiredInputsSig !== currentInputsSig) {
+        finalNode.dependsOn = desiredDeps;
+        finalNode.inputs = JSON.parse(desiredInputsSig);
+        finalNode.updatedAt = now;
+        updated = true;
+      }
+    }
   }
 
   if (updated) graph.nodes = nodes;
