@@ -1215,13 +1215,31 @@ function formatNodeLine(node) {
 
 async function statusCommand(rootDir) {
   const paths = choreoPaths(rootDir);
-  const graph = await loadWorkgraph(paths.graphPath);
-  if (!graph) throw new Error("Missing .choreo/workgraph.json. Run `choreo init`.");
+  const hasDb = Boolean(paths.dbPath && (await pathExists(paths.dbPath)));
+  const graph = hasDb ? await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath }) : await loadWorkgraph(paths.graphPath);
+  if (!graph) throw new Error("Missing .choreo state. Run `choreo init`.");
 
   const counts = countByStatus(graph.nodes);
   process.stdout.write("Workgraph status\n");
   for (const key of Object.keys(counts).sort()) {
     process.stdout.write(`- ${key}: ${counts[key]}\n`);
+  }
+
+  const inProgress = (graph.nodes || []).filter((n) => String(n?.status || "").toLowerCase() === "in_progress");
+  if (inProgress.length > 0) {
+    process.stdout.write("\nIn progress:\n");
+    const ordered = inProgress
+      .slice()
+      .sort((a, b) => String(a?.id || "").localeCompare(String(b?.id || "")));
+    for (const node of ordered) {
+      const runId = typeof node?.lock?.runId === "string" ? node.lock.runId.trim() : "";
+      process.stdout.write(`- ${node.id}${runId ? ` (run=${runId})` : ""}\n`);
+      if (runId) {
+        const logAbs = path.join(paths.runsDir, runId, "stdout.log");
+        const logRel = path.relative(paths.rootDir, logAbs) || logAbs;
+        process.stdout.write(`  log: ${logRel}\n`);
+      }
+    }
   }
 
   const next = selectNextNode(graph);
