@@ -84,3 +84,24 @@ CREATE TABLE IF NOT EXISTS kv_history (
 );
 
 CREATE INDEX IF NOT EXISTS idx_kv_history_node_key ON kv_history(node_id, key, id);
+
+CREATE TABLE IF NOT EXISTS mailbox (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  status TEXT NOT NULL,
+  command TEXT NOT NULL,
+  args_json TEXT NOT NULL DEFAULT '{}',
+
+  claim_token TEXT,
+  claimed_at TEXT,
+  claimed_by_pid INTEGER,
+  claimed_by_host TEXT,
+
+  completed_at TEXT,
+  result_json TEXT,
+  error_text TEXT,
+
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_mailbox_status_id ON mailbox(status, id);
+CREATE INDEX IF NOT EXISTS idx_mailbox_claim_token ON mailbox(claim_token);

@@ -21,3 +21,29 @@ export async function ensureDepsRequiredStatusColumn({ dbPath }) {
   return { changed: true };
 }
 
+export async function ensureMailboxTable({ dbPath }) {
+  const path = String(dbPath || "").trim();
+  if (!path) throw new Error("Missing dbPath");
+
+  await sqliteExec(
+    path,
+    "CREATE TABLE IF NOT EXISTS mailbox (\n" +
+      "  id INTEGER PRIMARY KEY AUTOINCREMENT,\n" +
+      "  status TEXT NOT NULL,\n" +
+      "  command TEXT NOT NULL,\n" +
+      "  args_json TEXT NOT NULL DEFAULT '{}',\n" +
+      "  claim_token TEXT,\n" +
+      "  claimed_at TEXT,\n" +
+      "  claimed_by_pid INTEGER,\n" +
+      "  claimed_by_host TEXT,\n" +
+      "  completed_at TEXT,\n" +
+      "  result_json TEXT,\n" +
+      "  error_text TEXT,\n" +
+      "  created_at TEXT NOT NULL\n" +
+      ");\n" +
+      "CREATE INDEX IF NOT EXISTS idx_mailbox_status_id ON mailbox(status, id);\n" +
+      "CREATE INDEX IF NOT EXISTS idx_mailbox_claim_token ON mailbox(claim_token);\n",
+  );
+
+  return { changed: false };
+}

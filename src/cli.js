@@ -19,8 +19,9 @@ import { acquireSupervisorLock, heartbeatSupervisorLock, readSupervisorLock, rel
 import { createUi } from "./lib/ui.js";
 import { sqliteExec, sqliteQueryJson } from "./lib/db/sqlite3.js";
 import { exportWorkgraphJson, loadWorkgraphFromDb } from "./lib/db/export.js";
+import { mailboxAck, mailboxClaimNext, mailboxEnqueue } from "./lib/db/mailbox.js";
 import { kvGet, kvList, kvPut } from "./lib/db/kv.js";
-import { ensureDepsRequiredStatusColumn } from "./lib/db/migrate.js";
+import { ensureDepsRequiredStatusColumn, ensureMailboxTable } from "./lib/db/migrate.js";
 import {
   allDoneDb,
   applyResult as applyResultDb,
@@ -40,6 +41,10 @@ function usage() {
 Usage:
   choreo [<goal...>] [--color] [--no-color]
   choreo chat [--no-color]
+  choreo control pause|resume
+  choreo control set-workers --workers=<n>
+  choreo control replan
+  choreo control cancel --node=<id>
   choreo node add --id=<id> --title="..." [--type=<t>] [--status=<s>] [--parent=<id>] [--runner=<name>]
   choreo node set-status --id=<id> --status=<open|done|failed|needs_human> [--force]
   choreo start [<goal...>] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
@@ -694,6 +699,7 @@ async function initCommand(rootDir, flags) {
   const schemaSql = await readFile(schemaUrl, "utf8");
   await sqliteExec(paths.dbPath, schemaSql);
   await ensureDepsRequiredStatusColumn({ dbPath: paths.dbPath });
+  await ensureMailboxTable({ dbPath: paths.dbPath });
   const defaultRetryPolicy = resolveDefaultRetryPolicy(config);
   const defaultRetryPolicyJson = defaultRetryPolicy ? sqlQuote(JSON.stringify(defaultRetryPolicy)) : null;
   const now = nowIso();
@@ -1398,6 +1404,7 @@ async function runCommand(rootDir, flags) {
   if (!config) throw new Error("Missing .choreo/config.json. Run `choreo init`.");
   if (!(await pathExists(paths.dbPath))) throw new Error("Missing .choreo/state.sqlite. Run `choreo init`.");
   await ensureDepsRequiredStatusColumn({ dbPath: paths.dbPath });
+  await ensureMailboxTable({ dbPath: paths.dbPath });
   const initGraph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
   if (!Array.isArray(initGraph.nodes) || initGraph.nodes.length === 0) {
     process.stderr.write("No nodes in .choreo/state.sqlite. Run `choreo start` (or `choreo init --force`) to seed a plan node.\n");
@@ -1515,6 +1522,151 @@ async function runCommand(rootDir, flags) {
 
   await appendLine(activityPath, `[${nowIso()}] supervisor-start pid=${process.pid}`);
 
+  const serial = createSerialQueue();
+  const abortControllersByNodeId = new Map();
+  const control = {
+    manualPaused: false,
+    replanPaused: false,
+    maxWorkers: workers,
+  };
+
+  const mailboxController = new AbortController();
+  const mailboxStopSignal = AbortSignal.any([abortSignal, mailboxController.signal]);
+  const mailboxHost = os.hostname();
+  const mailboxPollMsRaw = config.supervisor?.mailboxPollMs ?? 100;
+  const mailboxPollMsNum = Number(mailboxPollMsRaw);
+  const mailboxPollMs = Number.isFinite(mailboxPollMsNum) && mailboxPollMsNum >= 0 ? Math.floor(mailboxPollMsNum) : 100;
+
+  async function reopenPlanForReplan() {
+    const now = nowIso();
+    await sqliteExec(
+      paths.dbPath,
+      `UPDATE nodes\n` +
+        `SET status='open',\n` +
+        `    attempts=0,\n` +
+        `    checkpoint_json=NULL,\n` +
+        `    lock_run_id=NULL,\n` +
+        `    lock_started_at=NULL,\n` +
+        `    lock_pid=NULL,\n` +
+        `    lock_host=NULL,\n` +
+        `    completed_at=NULL,\n` +
+        `    updated_at=${sqlQuote(now)}\n` +
+        `WHERE id='plan-000';\n`,
+    );
+    const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+    await syncTaskPlan({ paths, graph });
+  }
+
+  async function maybeClearReplanPause() {
+    if (!control.replanPaused) return;
+    const rows = await sqliteQueryJson(paths.dbPath, "SELECT status FROM nodes WHERE id='plan-000' LIMIT 1;");
+    const status = String(rows?.[0]?.status || "").toLowerCase();
+    if (status === "done" || status === "failed") control.replanPaused = false;
+  }
+
+  async function selectRunnablePlannerCandidatesDb({ dbPath, nowIso, limit = 50 }) {
+    const now = typeof nowIso === "string" && nowIso.trim() ? nowIso : new Date().toISOString();
+    const limitNum = Number(limit);
+    const limitInt = Number.isFinite(limitNum) && limitNum > 0 ? Math.floor(limitNum) : 50;
+    return sqliteQueryJson(
+      dbPath,
+      `SELECT n.*\n` +
+        `FROM nodes n\n` +
+        `WHERE n.status='open'\n` +
+        `  AND (n.blocked_until IS NULL OR n.blocked_until <= ${sqlQuote(now)})\n` +
+        `  AND n.lock_run_id IS NULL\n` +
+        `  AND lower(n.type) IN ('plan','epic')\n` +
+        `  AND NOT EXISTS (\n` +
+        `    SELECT 1\n` +
+        `    FROM deps d\n` +
+        `    JOIN nodes dep ON dep.id = d.depends_on_id\n` +
+        `    WHERE d.node_id = n.id AND (\n` +
+        `      CASE COALESCE(NULLIF(lower(d.required_status), ''), 'done')\n` +
+        `        WHEN 'terminal' THEN dep.status NOT IN ('done', 'failed')\n` +
+        `        ELSE dep.status <> 'done'\n` +
+        `      END\n` +
+        `    )\n` +
+        `  )\n` +
+        `ORDER BY n.id\n` +
+        `LIMIT ${String(limitInt)};\n`,
+    );
+  }
+
+  const mailboxTask = Promise.resolve().then(async () => {
+    while (!mailboxStopSignal.aborted) {
+      let claimed = null;
+      try {
+        claimed = await mailboxClaimNext({
+          dbPath: paths.dbPath,
+          pid: process.pid,
+          host: mailboxHost,
+          nowIso: nowIso(),
+        });
+      } catch (error) {
+        await appendLine(errorsPath, `[${nowIso()}] mailbox-claim error: ${error?.message || String(error)}`);
+      }
+
+      if (!claimed) {
+        await sleep(mailboxPollMs, mailboxStopSignal);
+        continue;
+      }
+
+      const { id, command, args } = claimed;
+      try {
+        const cmd = String(command || "").trim();
+        const payload = args && typeof args === "object" ? args : {};
+
+        let result = {};
+        if (cmd === "pause") {
+          control.manualPaused = true;
+          result = { paused: true };
+        } else if (cmd === "resume") {
+          control.manualPaused = false;
+          result = { paused: Boolean(control.replanPaused) };
+        } else if (cmd === "set_workers") {
+          const nRaw = payload.workers;
+          const nNum = Number(nRaw);
+          const next = Number.isFinite(nNum) && nNum > 0 ? Math.floor(nNum) : null;
+          if (next == null) throw new Error("set_workers: invalid workers");
+          if (dryRun || once) {
+            result = { ignored: true, workers: next };
+          } else {
+            control.maxWorkers = next;
+            result = { workers: next };
+          }
+        } else if (cmd === "cancel") {
+          const nodeId = String(payload.nodeId || "").trim();
+          if (!nodeId) throw new Error("cancel: missing nodeId");
+          const controller = abortControllersByNodeId.get(nodeId);
+          if (!controller) throw new Error(`cancel: node not in flight: ${nodeId}`);
+          controller.abort("cancel");
+          result = { cancelled: nodeId };
+        } else if (cmd === "replan_now") {
+          if (dryRun || once) {
+            result = { ignored: true };
+          } else {
+            control.replanPaused = true;
+            await serial.enqueue(reopenPlanForReplan);
+            result = { replanPaused: true };
+          }
+        } else {
+          throw new Error(`Unknown mailbox command: ${cmd}`);
+        }
+
+        await mailboxAck({ dbPath: paths.dbPath, id, status: "done", result, errorText: null, nowIso: nowIso() });
+        await appendLine(activityPath, `[${nowIso()}] mailbox done id=${id} cmd=${cmd}`);
+      } catch (error) {
+        const message = error?.message || String(error);
+        try {
+          await mailboxAck({ dbPath: paths.dbPath, id, status: "failed", result: null, errorText: message, nowIso: nowIso() });
+        } catch {
+          // ignore
+        }
+        await appendLine(errorsPath, `[${nowIso()}] mailbox fail id=${id} ${message}`);
+      }
+    }
+  });
+
   let iter = 0;
   let lastIdleReason = "";
   let lastHeartbeatMs = 0;
@@ -1522,18 +1674,17 @@ async function runCommand(rootDir, flags) {
   // eslint-disable-next-line no-constant-condition
   try {
     async function runParallelSupervisor() {
-      const serial = createSerialQueue();
       const locks = new OwnershipLockManager();
       const inFlight = new Map();
       const worktreeMode = normalizeWorktreeMode(config?.supervisor?.worktrees?.mode);
       const worktreesDir = worktreeMode === "off" ? null : resolveWorktreesDir({ paths, config });
       const worktreeSerial = createSerialQueue();
 
-      const maxWorkerCount = workers;
-      const candidateLimit = Math.max(50, maxWorkerCount * 10);
-
       const spawnWorker = async (node, { nodeCwd = null, worktreePath = null } = {}) => {
         const run = runId();
+        const nodeAbort = new AbortController();
+        abortControllersByNodeId.set(node.id, nodeAbort);
+        const nodeAbortSignal = AbortSignal.any([abortSignal, nodeAbort.signal]);
         const promise = Promise.resolve()
           .then(async () => {
             if (worktreePath) {
@@ -1552,7 +1703,7 @@ async function runCommand(rootDir, flags) {
               errorsPath,
               live,
               ui,
-              abortSignal,
+              abortSignal: nodeAbortSignal,
               serial,
               multiWorker: true,
             });
@@ -1574,6 +1725,7 @@ async function runCommand(rootDir, flags) {
           .finally(async () => {
             inFlight.delete(node.id);
             locks.release(node.id);
+            abortControllersByNodeId.delete(node.id);
             await serial.enqueue(async () => repairChoreoStateOwnership({ paths, ui }));
           });
 
@@ -1630,9 +1782,18 @@ async function runCommand(rootDir, flags) {
           continue;
         }
 
+        await maybeClearReplanPause();
+        const pausedManual = Boolean(control.manualPaused);
+        const pausedReplan = !pausedManual && Boolean(control.replanPaused);
+        const maxWorkerCountNum = Number(dryRun || once ? 1 : control.maxWorkers);
+        const maxWorkerCount = Number.isFinite(maxWorkerCountNum) && maxWorkerCountNum > 0 ? Math.floor(maxWorkerCountNum) : 1;
+        const candidateLimit = Math.max(50, maxWorkerCount * 10);
+
         let spawned = 0;
-        if (!dryRun && inFlight.size < maxWorkerCount) {
-          const candidates = await selectRunnableCandidates({ dbPath: paths.dbPath, nowIso: nowIso(), limit: candidateLimit });
+        if (!dryRun && !pausedManual && inFlight.size < maxWorkerCount) {
+          const candidates = pausedReplan
+            ? await selectRunnablePlannerCandidatesDb({ dbPath: paths.dbPath, nowIso: nowIso(), limit: candidateLimit })
+            : await selectRunnableCandidates({ dbPath: paths.dbPath, nowIso: nowIso(), limit: candidateLimit });
           for (const row of candidates) {
             if (inFlight.size >= maxWorkerCount) break;
             const nodeId = String(row?.id || "").trim();
@@ -1643,6 +1804,7 @@ async function runCommand(rootDir, flags) {
             if (!node) continue;
 
             const role = resolveNodeRole(node);
+            if (pausedReplan && role !== "planner") continue;
             const nodeType = normalizeNodeType(node?.type);
             let lockAcquired = false;
             let nodeCwd = null;
@@ -1687,8 +1849,10 @@ async function runCommand(rootDir, flags) {
           continue;
         }
 
-        const nodeRow = await selectNextRunnableNode({ dbPath: paths.dbPath, nowIso: nowIso() });
-        if (nodeRow) continue;
+        if (!pausedManual && !pausedReplan) {
+          const nodeRow = await selectNextRunnableNode({ dbPath: paths.dbPath, nowIso: nowIso() });
+          if (nodeRow) continue;
+        }
 
         if (await allDoneDb({ dbPath: paths.dbPath })) {
           ui.event("done", "All nodes done.");
@@ -1893,7 +2057,22 @@ async function runCommand(rootDir, flags) {
         continue;
       }
 
-      const nodeRow = await selectNextRunnableNode({ dbPath: paths.dbPath, nowIso: nowIso() });
+      await maybeClearReplanPause();
+      const wantsParallelWorkers = !dryRun && !once && Number(control.maxWorkers) > 1;
+      if (wantsParallelWorkers) {
+        await runParallelSupervisor();
+        return;
+      }
+
+      let nodeRow = null;
+      if (!control.manualPaused) {
+        if (control.replanPaused) {
+          const planners = await selectRunnablePlannerCandidatesDb({ dbPath: paths.dbPath, nowIso: nowIso(), limit: 1 });
+          nodeRow = planners[0] || null;
+        } else {
+          nodeRow = await selectNextRunnableNode({ dbPath: paths.dbPath, nowIso: nowIso() });
+        }
+      }
       if (!nodeRow) {
         if (await allDoneDb({ dbPath: paths.dbPath })) {
           ui.event("done", "All nodes done.");
@@ -2076,23 +2255,33 @@ async function runCommand(rootDir, flags) {
           nodeCwd = worktreePath;
         }
       }
-      await executeNode({
-        rootDir,
-        paths,
-        config,
-        node,
-        nodeCwd,
-        run,
-        activityPath,
-        errorsPath,
-        live,
-        ui,
-        abortSignal,
-      });
+      const nodeAbort = new AbortController();
+      abortControllersByNodeId.set(node.id, nodeAbort);
+      const nodeAbortSignal = AbortSignal.any([abortSignal, nodeAbort.signal]);
+      try {
+        await executeNode({
+          rootDir,
+          paths,
+          config,
+          node,
+          nodeCwd,
+          run,
+          activityPath,
+          errorsPath,
+          live,
+          ui,
+          abortSignal: nodeAbortSignal,
+          serial,
+        });
+      } finally {
+        abortControllersByNodeId.delete(node.id);
+      }
       await repairChoreoStateOwnership({ paths, ui });
       if (once) return;
     }
   } finally {
+    mailboxController.abort();
+    await mailboxTask.catch(() => {});
     cancel.cleanup();
     await appendLine(activityPath, `[${nowIso()}] supervisor-exit pid=${process.pid}`);
     await releaseSupervisorLock(paths.lockPath);
@@ -3335,7 +3524,18 @@ async function chatCommand(rootDir, flags) {
       }
       if (line === "/exit" || line === "/quit") break;
       if (line === "/help") {
-        process.stdout.write("Commands:\n- /status\n- /run\n- /stop\n- /exit\n");
+        process.stdout.write(
+          "Commands:\n" +
+            "- /status\n" +
+            "- /run\n" +
+            "- /stop\n" +
+            "- /pause\n" +
+            "- /resume\n" +
+            "- /workers <n>\n" +
+            "- /replan\n" +
+            "- /cancel <nodeId>\n" +
+            "- /exit\n",
+        );
         rl.prompt();
         continue;
       }
@@ -3351,6 +3551,55 @@ async function chatCommand(rootDir, flags) {
       }
       if (line === "/stop") {
         await stopCommand(rootDir, flags);
+        rl.prompt();
+        continue;
+      }
+      if (line === "/pause") {
+        try {
+          await controlCommand(rootDir, ["pause"], {});
+        } catch (error) {
+          process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
+        }
+        rl.prompt();
+        continue;
+      }
+      if (line === "/resume") {
+        try {
+          await controlCommand(rootDir, ["resume"], {});
+        } catch (error) {
+          process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
+        }
+        rl.prompt();
+        continue;
+      }
+      if (line.startsWith("/workers")) {
+        const parts = line.split(/\s+/).filter(Boolean);
+        const n = parts[1] || "";
+        try {
+          await controlCommand(rootDir, ["set-workers"], { workers: n });
+        } catch (error) {
+          process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
+        }
+        rl.prompt();
+        continue;
+      }
+      if (line === "/replan") {
+        try {
+          await controlCommand(rootDir, ["replan"], {});
+        } catch (error) {
+          process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
+        }
+        rl.prompt();
+        continue;
+      }
+      if (line.startsWith("/cancel")) {
+        const parts = line.split(/\s+/).filter(Boolean);
+        const nodeId = parts[1] || "";
+        try {
+          await controlCommand(rootDir, ["cancel"], { node: nodeId });
+        } catch (error) {
+          process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
+        }
         rl.prompt();
         continue;
       }
@@ -3559,6 +3808,55 @@ async function nodeCommand(rootDir, positional, flags) {
   throw new Error(`Unknown node subcommand: ${sub}`);
 }
 
+async function controlCommand(rootDir, positional, flags) {
+  const paths = choreoPaths(rootDir);
+  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .choreo/state.sqlite. Run `choreo init`.");
+  await ensureMailboxTable({ dbPath: paths.dbPath });
+
+  const sub = String(positional[0] || "").trim();
+  if (!sub) throw new Error("Missing control subcommand. Use pause|resume|set-workers|replan|cancel.");
+
+  const now = nowIso();
+  if (sub === "pause") {
+    const res = await mailboxEnqueue({ dbPath: paths.dbPath, command: "pause", args: {}, nowIso: now });
+    process.stdout.write(`Enqueued pause (id=${res.id}).\n`);
+    return;
+  }
+
+  if (sub === "resume") {
+    const res = await mailboxEnqueue({ dbPath: paths.dbPath, command: "resume", args: {}, nowIso: now });
+    process.stdout.write(`Enqueued resume (id=${res.id}).\n`);
+    return;
+  }
+
+  if (sub === "set-workers") {
+    const nRaw = flags.workers ?? flags.n ?? flags.count;
+    const nNum = Number(nRaw);
+    const workers = Number.isFinite(nNum) && nNum > 0 ? Math.floor(nNum) : null;
+    if (workers == null) throw new Error("Missing --workers=<n>.");
+    const res = await mailboxEnqueue({ dbPath: paths.dbPath, command: "set_workers", args: { workers }, nowIso: now });
+    process.stdout.write(`Enqueued set-workers=${workers} (id=${res.id}).\n`);
+    return;
+  }
+
+  if (sub === "replan") {
+    const res = await mailboxEnqueue({ dbPath: paths.dbPath, command: "replan_now", args: {}, nowIso: now });
+    process.stdout.write(`Enqueued replan (id=${res.id}).\n`);
+    return;
+  }
+
+  if (sub === "cancel") {
+    const idFlag = typeof flags.node === "string" ? flags.node : typeof flags.id === "string" ? flags.id : "";
+    const nodeId = String(idFlag || positional[1] || "").trim();
+    if (!nodeId) throw new Error("Missing --node=<id>.");
+    const res = await mailboxEnqueue({ dbPath: paths.dbPath, command: "cancel", args: { nodeId }, nowIso: now });
+    process.stdout.write(`Enqueued cancel node=${nodeId} (id=${res.id}).\n`);
+    return;
+  }
+
+  throw new Error(`Unknown control subcommand: ${sub}`);
+}
+
 export async function main(argv) {
   const { command, positional, flags } = parseArgs(argv);
   const rootDir = process.cwd();
@@ -3628,6 +3926,11 @@ export async function main(argv) {
 
   if (command === "node") {
     await nodeCommand(rootDir, positional, flags);
+    return;
+  }
+
+  if (command === "control") {
+    await controlCommand(rootDir, positional, flags);
     return;
   }
 
