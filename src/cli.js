@@ -39,10 +39,13 @@ function usage() {
 
 Usage:
   choreo [<goal...>] [--color] [--no-color]
+  choreo chat [--no-color]
+  choreo node add --id=<id> --title="..." [--type=<t>] [--status=<s>] [--parent=<id>] [--runner=<name>]
+  choreo node set-status --id=<id> --status=<open|done|failed|needs_human> [--force]
   choreo start [<goal...>] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
   choreo init [--force] [--no-templates] [--goal="..."] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
-	  choreo goal [--goal="..."] [--max-turns=<n>] [--runner=<name>] [--live] [--no-live] [--color] [--no-color]
-	  choreo status
+		  choreo goal [--goal="..."] [--max-turns=<n>] [--runner=<name>] [--live] [--no-live] [--color] [--no-color]
+		  choreo status
 	  choreo run [--once] [--workers=<n>] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
 	  choreo resume [--once] [--workers=<n>] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
 	  choreo answer [--node=<id>] [--checkpoint=<file>] [--answer="..."] [--no-prompt]
@@ -51,8 +54,8 @@ Usage:
 	  choreo kv ls [--run] [--node=<id>] [--prefix=<p>] [--json]
   choreo microcall --prompt="..." [--runner=<name>] [--role=<role>] [--store-key=<k>] [--run] [--json]
   choreo templates sync [--force]
-  choreo stop [--signal=<sig>]
-  choreo graph validate
+		  choreo stop [--signal=<sig>]
+		  choreo graph validate
 
 State:
   .choreo/config.json
@@ -3238,16 +3241,338 @@ function installCancellation({ ui, label }) {
   };
 }
 
+async function runChatMicrocall({ rootDir, paths, config, prompt, runnerName, role }) {
+  const runnerNameFlag = typeof runnerName === "string" ? runnerName.trim() : "";
+  const resolvedRole = typeof role === "string" && role.trim() ? role.trim() : "researcher";
+  const pickedRunnerName = runnerNameFlag || resolveRoleRunnerPick(resolvedRole, config, { seed: prompt, attempt: 0 });
+  const runner = config.runners?.[pickedRunnerName];
+  if (!runner?.cmd) throw new Error(`Unknown runner: ${pickedRunnerName}`);
+
+  const microId = `chat-${runId()}`;
+  const microcallsBaseDir = path.join(paths.choreoDir, "microcalls");
+  const microDir = path.join(microcallsBaseDir, microId);
+  await ensureDir(microDir);
+
+  const packetPath = path.join(microDir, "packet.md");
+  const stdoutPath = path.join(microDir, "stdout.log");
+  const resultPath = path.join(microDir, "result.json");
+
+  const template = await resolveTemplate(rootDir, "microcall");
+  const packet = renderTemplate(template, {
+    REPO_ROOT: paths.rootDir,
+    MICROCALL_PROMPT: prompt,
+  });
+  await writeFile(packetPath, packet, "utf8");
+
+  const spawnIdentity = await resolveSpawnIdentity({ rootDir: paths.rootDir });
+  const identityEnv = envForIdentity(spawnIdentity);
+  const runnerEnv = mergeEnv(resolveRunnerEnv({ runnerName: pickedRunnerName, runner, cwd: paths.rootDir, paths }), identityEnv);
+  await ensureRunnerTmpDir(runnerEnv);
+  if (pickedRunnerName === "claude")
+    await ensureClaudeProjectTmpWritable({ cwd: paths.rootDir, uid: spawnIdentity?.uid ?? null, gid: spawnIdentity?.gid ?? null });
+
+  const execRes = await runRunnerCommand({
+    cmd: runner.cmd,
+    packetPath,
+    cwd: paths.rootDir,
+    logPath: stdoutPath,
+    timeoutMs: Number(runner.timeoutMs ?? 0),
+    env: runnerEnv,
+    uid: spawnIdentity?.uid ?? null,
+    gid: spawnIdentity?.gid ?? null,
+  });
+
+  const stdoutText = await readFile(stdoutPath, "utf8").catch(() => "");
+  const parsed = extractResultJson(stdoutText);
+  if (!parsed) {
+    const code = typeof execRes.code === "number" ? execRes.code : null;
+    const sig = execRes.signal ? String(execRes.signal) : "";
+    throw new Error(`Could not extract result JSON from chat microcall output${code ? ` (code=${code})` : ""}${sig ? ` (signal=${sig})` : ""}.`);
+  }
+
+  await writeJsonAtomic(resultPath, parsed);
+  return parsed;
+}
+
+async function startSupervisorDetached({ rootDir, flags }) {
+  const paths = choreoPaths(rootDir);
+  const lock = await readSupervisorLock(paths.lockPath);
+  if (lock?.pid && String(lock.host || "").trim() === os.hostname()) {
+    process.stdout.write(`Supervisor already running pid=${lock.pid}.\n`);
+    return;
+  }
+  const choreoBin = fileURLToPath(new URL("../bin/choreo.js", import.meta.url));
+  const args = [choreoBin, "run", "--no-live", "--no-color"];
+  const child = spawn(process.execPath, args, {
+    cwd: paths.rootDir,
+    env: { ...process.env, NO_COLOR: "1" },
+    stdio: ["ignore", "ignore", "ignore"],
+    detached: true,
+  });
+  child.unref?.();
+  process.stdout.write(`Started supervisor pid=${child.pid}\n`);
+}
+
+async function chatCommand(rootDir, flags) {
+  const paths = choreoPaths(rootDir);
+  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .choreo/state.sqlite. Run `choreo init`.");
+  const config = await loadConfig(paths.configPath);
+  if (!config) throw new Error("Missing .choreo/config.json. Run `choreo init`.");
+  process.stdout.write("choreo chat (type /help)\n");
+  const noLlm = Boolean(flags["no-llm"]) || Boolean(flags.noLlm);
+  const runnerOverride = typeof flags.runner === "string" ? flags.runner.trim() : "";
+  const roleOverride = typeof flags.role === "string" ? flags.role.trim() : "researcher";
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  rl.setPrompt("choreo> ");
+  rl.prompt();
+  try {
+    for await (const lineRaw of rl) {
+      const line = String(lineRaw || "").trim();
+      if (!line) {
+        rl.prompt();
+        continue;
+      }
+      if (line === "/exit" || line === "/quit") break;
+      if (line === "/help") {
+        process.stdout.write("Commands:\n- /status\n- /run\n- /stop\n- /exit\n");
+        rl.prompt();
+        continue;
+      }
+      if (line === "/status") {
+        await statusCommand(rootDir);
+        rl.prompt();
+        continue;
+      }
+      if (line === "/run") {
+        await startSupervisorDetached({ rootDir, flags });
+        rl.prompt();
+        continue;
+      }
+      if (line === "/stop") {
+        await stopCommand(rootDir, flags);
+        rl.prompt();
+        continue;
+      }
+      if (!line.startsWith("/")) {
+        if (noLlm) {
+          process.stdout.write("LLM disabled. Use /help or /status.\n");
+          rl.prompt();
+          continue;
+        }
+        try {
+          const counts = await countByStatusDb({ dbPath: paths.dbPath });
+          const next = await selectNextRunnableNode({ dbPath: paths.dbPath, nowIso: nowIso() });
+          const nodeLines = (await listNodes({ dbPath: paths.dbPath }))
+            .map((n) => formatNodeLine(n))
+            .slice(0, 40)
+            .join("\n");
+          const activityPath = path.join(paths.memoryDir, "activity.log");
+          const recent = await readTextTruncated(activityPath, 4_000);
+
+          const prompt =
+            `You are Choreo Chat Router.\n` +
+            `Return JSON in <result> with {status, summary, data:{reply, ops}}.\n` +
+            `Allowed ops:\n` +
+            `- {"type":"status"}\n` +
+            `- {"type":"node.add","id":"task-001","title":"...","nodeType":"task","parentId":"plan-000","status":"open","runner":null}\n` +
+            `- {"type":"node.setStatus","id":"task-001","status":"open|done|failed|needs_human","force":false}\n` +
+            `- {"type":"run.start"}\n` +
+            `- {"type":"run.stop","signal":"SIGTERM"}\n` +
+            `Rules:\n` +
+            `- Prefer ops for status checks and simple replanning.\n` +
+            `- If unclear, ask one clarifying question in reply and ops=[].\n` +
+            `\n` +
+            `State counts: ${JSON.stringify(counts)}\n` +
+            `Next runnable: ${next ? formatNodeLine(next) : "(none)"}\n` +
+            `Nodes (first 40):\n${nodeLines}\n` +
+            (recent ? `\nRecent activity (tail):\n${recent}\n` : "") +
+            `\nUser: ${line}\n`;
+
+          const routed = await runChatMicrocall({
+            rootDir,
+            paths,
+            config,
+            prompt,
+            runnerName: runnerOverride,
+            role: roleOverride,
+          });
+          const data = routed?.data && typeof routed.data === "object" ? routed.data : null;
+          const reply = typeof data?.reply === "string" ? data.reply.trim() : "";
+          if (reply) process.stdout.write(reply + "\n");
+          const opsRaw = data?.ops;
+          const ops = Array.isArray(opsRaw) ? opsRaw : [];
+          for (const op of ops) {
+            const type = typeof op?.type === "string" ? op.type.trim() : "";
+            if (!type) continue;
+            if (type === "status") {
+              await statusCommand(rootDir);
+              continue;
+            }
+            if (type === "node.add") {
+              await nodeCommand(rootDir, ["add"], {
+                id: typeof op.id === "string" ? op.id : "",
+                title: typeof op.title === "string" ? op.title : "",
+                type: typeof op.nodeType === "string" ? op.nodeType : "task",
+                status: typeof op.status === "string" ? op.status : "open",
+                parent: typeof op.parentId === "string" ? op.parentId : "plan-000",
+                runner: typeof op.runner === "string" ? op.runner : "",
+              });
+              continue;
+            }
+            if (type === "node.setStatus") {
+              await nodeCommand(rootDir, ["set-status"], {
+                id: typeof op.id === "string" ? op.id : "",
+                status: typeof op.status === "string" ? op.status : "",
+                force: Boolean(op.force),
+              });
+              continue;
+            }
+            if (type === "run.start") {
+              await startSupervisorDetached({ rootDir, flags });
+              continue;
+            }
+            if (type === "run.stop") {
+              await stopCommand(rootDir, { ...flags, signal: typeof op.signal === "string" ? op.signal : undefined });
+              continue;
+            }
+          }
+        } catch (error) {
+          process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
+        }
+        rl.prompt();
+        continue;
+      }
+      if (line === "/run.start") {
+        await startSupervisorDetached({ rootDir, flags });
+        rl.prompt();
+        continue;
+      }
+      if (line === "/run.stop") {
+        await stopCommand(rootDir, flags);
+        rl.prompt();
+        continue;
+      }
+      if (line === "/run.status") {
+        const lock = await readSupervisorLock(paths.lockPath);
+        if (!lock) process.stdout.write("No supervisor lock found.\n");
+        else process.stdout.write(`Supervisor lock pid=${lock.pid || "?"} host=${lock.host || "?"}\n`);
+        rl.prompt();
+        continue;
+      }
+      if (line === "/node.add") {
+        process.stdout.write('Tip: use natural language, or run `choreo node add --id=... --title="..." --parent=plan-000`.\n');
+        rl.prompt();
+        continue;
+      }
+      if (line === "/node.set-status") {
+        process.stdout.write("Tip: run `choreo node set-status --id=<id> --status=<open|done|failed|needs_human>`.\n");
+        rl.prompt();
+        continue;
+      }
+      process.stdout.write(`Unknown command: ${line}\n`);
+      rl.prompt();
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+async function nodeCommand(rootDir, positional, flags) {
+  const paths = choreoPaths(rootDir);
+  const config = await loadConfig(paths.configPath);
+  if (!config) throw new Error("Missing .choreo/config.json. Run `choreo init`.");
+  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .choreo/state.sqlite. Run `choreo init`.");
+  await ensureDepsRequiredStatusColumn({ dbPath: paths.dbPath });
+
+  const sub = String(positional?.[0] || "").trim();
+  if (!sub) throw new Error("Missing node subcommand. Use `choreo node add` or `choreo node set-status`.");
+
+  if (sub === "add") {
+    const id = typeof flags.id === "string" ? flags.id.trim() : "";
+    if (!id) throw new Error("Missing --id.");
+    const title = typeof flags.title === "string" ? flags.title : "";
+    const type = typeof flags.type === "string" ? flags.type.trim() : "task";
+    const status = typeof flags.status === "string" ? flags.status.trim() : "open";
+    const parentId = typeof flags.parent === "string" ? flags.parent.trim() : "";
+    const runner = typeof flags.runner === "string" ? flags.runner.trim() : "";
+
+    const now = nowIso();
+    await sqliteExec(
+      paths.dbPath,
+      `BEGIN IMMEDIATE;\n` +
+        `INSERT OR IGNORE INTO nodes(\n` +
+        `  id, title, type, status, parent_id, runner,\n` +
+        `  created_at, updated_at\n` +
+        `)\n` +
+        `VALUES(\n` +
+        `  ${sqlQuote(id)}, ${sqlQuote(title)}, ${sqlQuote(type)}, ${sqlQuote(status)}, ${parentId ? sqlQuote(parentId) : "NULL"},\n` +
+        `  ${runner ? sqlQuote(runner) : "NULL"},\n` +
+        `  ${sqlQuote(now)}, ${sqlQuote(now)}\n` +
+        `);\n` +
+        `COMMIT;\n`,
+    );
+
+    const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+    await syncTaskPlan({ paths, graph });
+    return;
+  }
+
+  if (sub === "set-status") {
+    const id = typeof flags.id === "string" ? flags.id.trim() : "";
+    if (!id) throw new Error("Missing --id.");
+    const desired = normalizeStatus(flags.status);
+    const allowed = desired === "open" || desired === "done" || desired === "failed" || desired === "needs_human";
+    if (!allowed) throw new Error("Invalid --status. Use open|done|failed|needs_human.");
+
+    const force = Boolean(flags.force);
+    const rows = await sqliteQueryJson(
+      paths.dbPath,
+      `SELECT lock_run_id FROM nodes WHERE id=${sqlQuote(id)} LIMIT 1;\n`,
+    );
+    const lockRunId = rows[0]?.lock_run_id ?? null;
+    if (lockRunId && !force) throw new Error(`Refusing to update locked node ${id} without --force.`);
+
+    const isOpen = desired === "open";
+    const isTerminal = desired === "done" || desired === "failed";
+    const now = nowIso();
+    await sqliteExec(
+      paths.dbPath,
+      `UPDATE nodes\n` +
+        `SET status=${sqlQuote(desired)},\n` +
+        `    attempts=${isOpen ? "0" : "attempts"},\n` +
+        `    checkpoint_json=${isOpen ? "NULL" : "checkpoint_json"},\n` +
+        `    lock_run_id=NULL,\n` +
+        `    lock_started_at=NULL,\n` +
+        `    lock_pid=NULL,\n` +
+        `    lock_host=NULL,\n` +
+        `    completed_at=${isOpen ? "NULL" : isTerminal ? sqlQuote(now) : "completed_at"},\n` +
+        `    updated_at=${sqlQuote(now)}\n` +
+        `WHERE id=${sqlQuote(id)};\n`,
+    );
+
+    const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+    await syncTaskPlan({ paths, graph });
+    return;
+  }
+
+  throw new Error(`Unknown node subcommand: ${sub}`);
+}
+
 export async function main(argv) {
   const { command, positional, flags } = parseArgs(argv);
   const rootDir = process.cwd();
 
   if (!command || flags.h || flags.help) {
-    if (flags.h || flags.help || !process.stdin.isTTY || !process.stdout.isTTY) {
+    const forceChat = String(process.env.CHOREO_FORCE_CHAT || "").trim() === "1";
+    const interactive = (process.stdin.isTTY && process.stdout.isTTY) || forceChat;
+    if (flags.h || flags.help || !interactive) {
       process.stdout.write(usage());
       return;
     }
-    await startCommand(rootDir, flags, []);
+    const paths = choreoPaths(rootDir);
+    if (await pathExists(paths.dbPath)) await chatCommand(rootDir, flags);
+    else await startCommand(rootDir, flags, []);
     return;
   }
 
@@ -3293,6 +3618,16 @@ export async function main(argv) {
 
   if (command === "microcall") {
     await microcallCommand(rootDir, flags);
+    return;
+  }
+
+  if (command === "chat") {
+    await chatCommand(rootDir, flags);
+    return;
+  }
+
+  if (command === "node") {
+    await nodeCommand(rootDir, positional, flags);
     return;
   }
 
