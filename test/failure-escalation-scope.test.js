@@ -30,10 +30,10 @@ function runCli({ binPath, cwd, args }) {
   });
 }
 
-test("applyResult: failing escalation node promotes to parent plan", async () => {
+test("applyResult: leaf failure escalates to nearest plan scope", async () => {
   const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
   const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-escalation-promote-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-escalation-scope-"));
 
   const initRes = await runCli({
     binPath,
@@ -52,66 +52,56 @@ test("applyResult: failing escalation node promotes to parent plan", async () =>
       `VALUES\n` +
       `  ('plan-root','root','plan','open',NULL,'{\"maxAttempts\":1}','${now}','${now}'),\n` +
       `  ('plan-child','child','plan','open','plan-root','{\"maxAttempts\":1}','${now}','${now}'),\n` +
-      `  ('plan-escalate-plan-child','Escalate plan-child','plan','open','plan-root','{\"maxAttempts\":1}','${now}','${now}');\n`,
+      `  ('task-parent','p','task','open','plan-child','{\"maxAttempts\":1}','${now}','${now}'),\n` +
+      `  ('task-sub','s','task','open','task-parent','{\"maxAttempts\":1}','${now}','${now}');\n`,
   );
 
   await applyResult({
     dbPath,
-    nodeId: "plan-escalate-plan-child",
+    nodeId: "task-sub",
     runId: "run-1",
     nowIso: new Date().toISOString(),
-    result: { status: "fail", summary: "nope", next: { addNodes: [], setStatus: [] } },
+    result: { status: "fail", next: { addNodes: [], setStatus: [] } },
   });
 
-  const promoted = await sqliteJson(dbPath, "SELECT id, parent_id, type, status FROM nodes WHERE id='plan-escalate-plan-root';");
-  assert.equal(promoted[0]?.id, "plan-escalate-plan-root");
-  assert.equal(promoted[0]?.type, "plan");
-  assert.equal(promoted[0]?.status, "open");
-  assert.equal(promoted[0]?.parent_id, null);
+  const escalation = await sqliteJson(dbPath, "SELECT id, parent_id, type, status FROM nodes WHERE id='plan-escalate-plan-child';");
+  assert.equal(escalation[0]?.id, "plan-escalate-plan-child");
+  assert.equal(escalation[0]?.type, "plan");
+  assert.equal(escalation[0]?.status, "open");
+  assert.equal(escalation[0]?.parent_id, "plan-root");
 
   const deps = await sqliteJson(
     dbPath,
-    "SELECT node_id, depends_on_id, required_status FROM deps WHERE node_id='plan-escalate-plan-root' AND depends_on_id='plan-escalate-plan-child';",
+    "SELECT node_id, depends_on_id, required_status FROM deps WHERE node_id='plan-escalate-plan-child' AND depends_on_id='task-sub';",
   );
   assert.equal(deps.length, 1);
   assert.equal(deps[0]?.required_status, "terminal");
 
-  const nested = await sqliteJson(dbPath, "SELECT id FROM nodes WHERE id='plan-escalate-plan-escalate-plan-child';");
-  assert.equal(nested.length, 0);
-});
+  const noLeafEsc = await sqliteJson(dbPath, "SELECT id FROM nodes WHERE id='plan-escalate-task-sub';");
+  assert.equal(noLeafEsc.length, 0);
 
-test("applyResult: failing root escalation does not nest escalation nodes", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-escalation-root-stop-"));
-
-  const initRes = await runCli({
-    binPath,
-    cwd: tmpDir,
-    args: ["init", "--goal", "X", "--no-refine", "--force", "--no-color"],
-  });
-  assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
-
-  const dbPath = path.join(tmpDir, ".choreo", "state.sqlite");
-  const now = new Date().toISOString().replace(/'/g, "''");
   await sqliteExec(
     dbPath,
-    `DELETE FROM deps;\n` +
-      `DELETE FROM nodes;\n` +
+    `UPDATE nodes\n` +
+      `SET status='done', attempts=0, completed_at='${now}', updated_at='${now}'\n` +
+      `WHERE id='plan-escalate-plan-child';\n` +
       `INSERT INTO nodes(id, title, type, status, parent_id, retry_policy_json, created_at, updated_at)\n` +
-      `VALUES\n` +
-      `  ('plan-root','root','plan','open',NULL,'{\"maxAttempts\":1}','${now}','${now}'),\n` +
-      `  ('plan-escalate-plan-root','Escalate plan-root','plan','open',NULL,'{\"maxAttempts\":1}','${now}','${now}');\n`,
+      `VALUES('task-sub-2','s2','task','open','task-parent','{\"maxAttempts\":1}','${now}','${now}');\n`,
   );
 
   await applyResult({
     dbPath,
-    nodeId: "plan-escalate-plan-root",
-    runId: "run-1",
+    nodeId: "task-sub-2",
+    runId: "run-2",
     nowIso: new Date().toISOString(),
-    result: { status: "fail", summary: "nope", next: { addNodes: [], setStatus: [] } },
+    result: { status: "fail", next: { addNodes: [], setStatus: [] } },
   });
 
-  const nested = await sqliteJson(dbPath, "SELECT id FROM nodes WHERE id='plan-escalate-plan-escalate-plan-root';");
-  assert.equal(nested.length, 0);
+  const reopened = await sqliteJson(
+    dbPath,
+    "SELECT status, attempts, completed_at FROM nodes WHERE id='plan-escalate-plan-child';",
+  );
+  assert.equal(reopened[0]?.status, "open");
+  assert.equal(reopened[0]?.attempts, 0);
+  assert.equal(reopened[0]?.completed_at, null);
 });

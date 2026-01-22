@@ -39,6 +39,35 @@ function parseRetryPolicyJson(value) {
   }
 }
 
+async function findNearestPlanOrEpic({ dbPath, startId }) {
+  const id = typeof startId === "string" ? startId.trim() : "";
+  if (!id) return null;
+  const rows = await sqliteQueryJson(
+    dbPath,
+    `WITH RECURSIVE anc(id, parent_id, type, depth) AS (\n` +
+      `  SELECT id, parent_id, lower(type) AS type, 0 AS depth\n` +
+      `  FROM nodes\n` +
+      `  WHERE id=${sqlQuote(id)}\n` +
+      `  UNION ALL\n` +
+      `  SELECT n.id, n.parent_id, lower(n.type) AS type, anc.depth + 1\n` +
+      `  FROM nodes n\n` +
+      `  JOIN anc ON n.id = anc.parent_id\n` +
+      `  WHERE anc.parent_id IS NOT NULL\n` +
+      `)\n` +
+      `SELECT id, parent_id, type\n` +
+      `FROM anc\n` +
+      `WHERE type IN ('plan','epic')\n` +
+      `ORDER BY depth\n` +
+      `LIMIT 1;\n`,
+  );
+  const row = rows[0] || null;
+  const foundId = typeof row?.id === "string" && row.id.trim() ? row.id.trim() : null;
+  if (!foundId) return null;
+  const parentId = typeof row?.parent_id === "string" && row.parent_id.trim() ? row.parent_id.trim() : null;
+  const type = typeof row?.type === "string" && row.type.trim() ? row.type.trim() : null;
+  return { id: foundId, parentId, type };
+}
+
 export async function selectNextRunnableNode({ dbPath, nowIso }) {
   const now = typeof nowIso === "string" && nowIso.trim() ? nowIso : new Date().toISOString();
   const rows = await sqliteQueryJson(
@@ -418,11 +447,29 @@ export async function applyResult({ dbPath, nodeId, runId, result, nowIso, defau
     const nodeParentId = typeof node.parent_id === "string" && node.parent_id.trim() ? node.parent_id.trim() : null;
 
     const isEscalationNode = nodeId.startsWith("plan-escalate-");
-    const escalationSubjectId = isEscalationNode && nodeParentId ? nodeParentId : nodeId;
-    const escalationId = `plan-escalate-${escalationSubjectId}`;
-    const dependsOnId = isEscalationNode && nodeParentId ? nodeId : escalationSubjectId;
-
+    if (isEscalationNode && !nodeParentId) return;
+    let escalationSubjectId = nodeId;
+    let dependsOnId = nodeId;
     let parentId = nodeParentId;
+
+    if (isEscalationNode && nodeParentId) {
+      escalationSubjectId = nodeParentId;
+      dependsOnId = nodeId;
+    } else if (!isEscalationNode) {
+      const scope = await findNearestPlanOrEpic({ dbPath, startId: nodeId });
+      if (scope?.id) {
+        escalationSubjectId = scope.id;
+        dependsOnId = nodeId;
+        parentId = scope.parentId;
+        if (parentId) {
+          const parentScope = await findNearestPlanOrEpic({ dbPath, startId: parentId });
+          parentId = parentScope?.id ?? parentId;
+        }
+      }
+    }
+
+    const escalationId = `plan-escalate-${escalationSubjectId}`;
+
     if (isEscalationNode && nodeParentId) {
       const parentRows = await sqliteQueryJson(
         dbPath,
@@ -454,7 +501,19 @@ export async function applyResult({ dbPath, nodeId, runId, result, nowIso, defau
         `  ${sqlQuote(now)}, ${sqlQuote(now)}\n` +
         `);\n` +
         `INSERT OR IGNORE INTO deps(node_id, depends_on_id, required_status)\n` +
-        `VALUES(${sqlQuote(escalationId)}, ${sqlQuote(dependsOnId)}, 'terminal');\n`,
+        `VALUES(${sqlQuote(escalationId)}, ${sqlQuote(dependsOnId)}, 'terminal');\n` +
+        `UPDATE nodes\n` +
+        `SET status='open',\n` +
+        `    attempts=0,\n` +
+        `    checkpoint_json=NULL,\n` +
+        `    lock_run_id=NULL,\n` +
+        `    lock_started_at=NULL,\n` +
+        `    lock_pid=NULL,\n` +
+        `    lock_host=NULL,\n` +
+        `    completed_at=NULL,\n` +
+        `    updated_at=${sqlQuote(now)}\n` +
+        `WHERE id=${sqlQuote(escalationId)}\n` +
+        `  AND status IN ('done','failed');\n`,
     );
   }
 }
