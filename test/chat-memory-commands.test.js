@@ -43,10 +43,10 @@ function runCliInteractive({ binPath, cwd, args, input }) {
   });
 }
 
-test("chat: /pause enqueues a control command", async () => {
+test("chat: /memory prints rollup and /forget clears it", async () => {
   const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
   const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-chat-controls-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-chat-memory-cmds-"));
 
   const initRes = await runCli({
     binPath,
@@ -55,34 +55,22 @@ test("chat: /pause enqueues a control command", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const res = await runCliInteractive({
+  const putRes = await runCli({
     binPath,
     cwd: tmpDir,
-    args: ["chat", "--no-llm", "--no-color"],
-    input: "/pause\n/exit\n",
+    args: ["kv", "put", "--run", "--key", "chat.rollup", "--value", "S1", "--no-color"],
   });
-  assert.equal(res.code, 0, res.stderr || res.stdout);
-  assert.match(res.stdout, /Enqueued pause/);
-});
-
-test("chat: natural language 'pause launching' works without LLM", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-chat-controls-nl-"));
-
-  const initRes = await runCli({
-    binPath,
-    cwd: tmpDir,
-    args: ["init", "--goal", "X", "--no-refine", "--force", "--no-color"],
-  });
-  assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
+  assert.equal(putRes.code, 0, putRes.stderr || putRes.stdout);
 
   const res = await runCliInteractive({
     binPath,
     cwd: tmpDir,
     args: ["chat", "--no-llm", "--no-color"],
-    input: "pause launching\n/exit\n",
+    input: "/memory\n/forget\n/memory\n/exit\n",
   });
   assert.equal(res.code, 0, res.stderr || res.stdout);
-  assert.match(res.stdout, /Enqueued pause/);
+  assert.match(res.stdout, /rolling_summary:\s*S1/);
+  assert.match(res.stdout, /Cleared chat memory/);
+  assert.match(res.stdout, /Chat memory: \(empty\)/);
 });
+

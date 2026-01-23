@@ -45,8 +45,11 @@ Usage:
   choreo control set-workers --workers=<n>
   choreo control replan
   choreo control cancel --node=<id>
-  choreo node add --id=<id> --title="..." [--type=<t>] [--status=<s>] [--parent=<id>] [--runner=<name>]
+  choreo node add --id=<id> --title="..." [--type=<t>] [--status=<s>] [--parent=<id>] [--runner=<name>] [--inputs=<json>] [--ownership=<json>] [--acceptance=<json>] [--verify=<json>] [--retry-policy=<json>] [--depends-on=<json|a,b>]
+  choreo node update --id=<id> [--title="..."] [--type=<t>] [--parent=<id>] [--runner=<name>] [--inputs=<json>] [--ownership=<json>] [--acceptance=<json>] [--verify=<json>] [--retry-policy=<json>] [--force]
   choreo node set-status --id=<id> --status=<open|done|failed|needs_human> [--force]
+  choreo dep add --node=<id> --depends-on=<id> [--required-status=<done|terminal>]
+  choreo dep remove --node=<id> --depends-on=<id>
   choreo start [<goal...>] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
   choreo init [--force] [--no-templates] [--goal="..."] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
 		  choreo goal [--goal="..."] [--max-turns=<n>] [--runner=<name>] [--live] [--no-live] [--color] [--no-color]
@@ -85,6 +88,62 @@ function stableJsonSig(value, fallback = "[]") {
   } catch {
     return fallback;
   }
+}
+
+function safeJsonParseAny(value) {
+  if (value == null) return null;
+  const text = String(value);
+  if (!text.trim()) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function parseJsonFlag(value, fallback) {
+  if (value == null) return fallback;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return fallback;
+    const parsed = safeJsonParseAny(trimmed);
+    if (parsed == null) throw new Error("Invalid JSON.");
+    return parsed;
+  }
+  return value;
+}
+
+function parseJsonArrayFlag(value, fallback, label) {
+  const parsed = parseJsonFlag(value, fallback);
+  if (!Array.isArray(parsed)) throw new Error(`${label} must be a JSON array.`);
+  return parsed;
+}
+
+function parseRetryPolicyFlag(value, fallback) {
+  const parsed = parseJsonFlag(value, fallback);
+  if (!parsed || typeof parsed !== "object") throw new Error("retryPolicy must be a JSON object.");
+  const maxAttempts = normalizeMaxAttempts(parsed.maxAttempts);
+  if (!maxAttempts) throw new Error("retryPolicy.maxAttempts must be a positive integer.");
+  return { maxAttempts };
+}
+
+function parseDependsOnFlag(value) {
+  if (value == null) return [];
+  if (Array.isArray(value)) return value.map((v) => String(v || "").trim()).filter(Boolean);
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    if (trimmed.startsWith("[")) {
+      const parsed = safeJsonParseAny(trimmed);
+      if (!Array.isArray(parsed)) throw new Error("dependsOn must be a JSON array.");
+      return parsed.map((v) => String(v || "").trim()).filter(Boolean);
+    }
+    return trimmed
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return [];
 }
 
 function resolveDefaultRetryPolicy(config) {
@@ -3510,7 +3569,26 @@ async function chatCommand(rootDir, flags) {
   process.stdout.write("choreo chat (type /help)\n");
   const noLlm = Boolean(flags["no-llm"]) || Boolean(flags.noLlm);
   const runnerOverride = typeof flags.runner === "string" ? flags.runner.trim() : "";
-  const roleOverride = typeof flags.role === "string" ? flags.role.trim() : "researcher";
+  const roleOverride = typeof flags.role === "string" ? flags.role.trim() : "planner";
+
+  function truncateText(value, maxLen) {
+    const s = String(value || "");
+    const n = Number(maxLen);
+    const limit = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+    if (!limit) return "";
+    if (s.length <= limit) return s;
+    return s.slice(0, Math.max(0, limit - 1)) + "…";
+  }
+
+  function safeJsonParse(text) {
+    const s = typeof text === "string" ? text.trim() : "";
+    if (!s) return null;
+    try {
+      return JSON.parse(s);
+    } catch {
+      return null;
+    }
+  }
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   rl.setPrompt("choreo> ");
@@ -3534,6 +3612,8 @@ async function chatCommand(rootDir, flags) {
             "- /workers <n>\n" +
             "- /replan\n" +
             "- /cancel <nodeId>\n" +
+            "- /memory\n" +
+            "- /forget\n" +
             "- /exit\n",
         );
         rl.prompt();
@@ -3603,6 +3683,60 @@ async function chatCommand(rootDir, flags) {
         rl.prompt();
         continue;
       }
+      if (line === "/memory") {
+        try {
+          const chatNodeId = "__run__";
+          const chatRollupRow = await kvGet({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.rollup" }).catch(() => null);
+          const chatSummaryRow = await kvGet({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.summary" }).catch(() => null);
+          const chatLastOpsRow = await kvGet({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.last_ops" }).catch(() => null);
+          const chatTurnsRow = await kvGet({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.turns" }).catch(() => null);
+          const rollup = typeof chatRollupRow?.value_text === "string" ? chatRollupRow.value_text.trim() : "";
+          const summary = typeof chatSummaryRow?.value_text === "string" ? chatSummaryRow.value_text.trim() : "";
+          const lastOpsTextRaw = typeof chatLastOpsRow?.value_text === "string" ? chatLastOpsRow.value_text.trim() : "";
+          const lastOpsText = lastOpsTextRaw === "[]" ? "" : lastOpsTextRaw;
+          const turnsText = typeof chatTurnsRow?.value_text === "string" ? chatTurnsRow.value_text.trim() : "";
+          const turnsParsed = safeJsonParse(turnsText);
+          const turns = Array.isArray(turnsParsed) ? turnsParsed : [];
+          const hasTurns = turns.length > 0;
+
+          if (!rollup && !summary && !lastOpsText && !hasTurns) {
+            process.stdout.write("Chat memory: (empty)\n");
+          } else {
+            if (rollup) process.stdout.write(`rolling_summary: ${rollup}\n`);
+            if (summary) process.stdout.write(`summary: ${summary}\n`);
+            if (lastOpsText) process.stdout.write(`last_ops: ${lastOpsText}\n`);
+            if (hasTurns) process.stdout.write(`turns: ${turns.length}\n`);
+          }
+        } catch (error) {
+          process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
+        }
+        rl.prompt();
+        continue;
+      }
+      if (line === "/forget") {
+        try {
+          const chatNodeId = "__run__";
+          const now = nowIso();
+          await kvPut({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.rollup", valueText: "", nowIso: now });
+          await kvPut({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.summary", valueText: "", nowIso: now });
+          await kvPut({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.last_ops", valueText: "", nowIso: now });
+          await kvPut({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.turns", valueText: "[]", nowIso: now });
+          process.stdout.write("Cleared chat memory.\n");
+        } catch (error) {
+          process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
+        }
+        rl.prompt();
+        continue;
+      }
+      if (!line.startsWith("/") && /^pause(\s+launching)?$/i.test(line)) {
+        try {
+          await controlCommand(rootDir, ["pause"], {});
+        } catch (error) {
+          process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
+        }
+        rl.prompt();
+        continue;
+      }
       if (!line.startsWith("/")) {
         if (noLlm) {
           process.stdout.write("LLM disabled. Use /help or /status.\n");
@@ -3619,18 +3753,62 @@ async function chatCommand(rootDir, flags) {
           const activityPath = path.join(paths.memoryDir, "activity.log");
           const recent = await readTextTruncated(activityPath, 4_000);
 
-          const prompt =
-            `You are Choreo Chat Router.\n` +
-            `Return JSON in <result> with {status, summary, data:{reply, ops}}.\n` +
-            `Allowed ops:\n` +
-            `- {"type":"status"}\n` +
-            `- {"type":"node.add","id":"task-001","title":"...","nodeType":"task","parentId":"plan-000","status":"open","runner":null}\n` +
+          const chatNodeId = "__run__";
+          const chatRollupRow = await kvGet({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.rollup" }).catch(() => null);
+          const chatSummaryRow = await kvGet({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.summary" }).catch(() => null);
+          const chatLastOpsRow = await kvGet({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.last_ops" }).catch(() => null);
+          const chatTurnsRow = await kvGet({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.turns" }).catch(() => null);
+
+          const chatRollup = typeof chatRollupRow?.value_text === "string" ? chatRollupRow.value_text.trim() : "";
+          const chatSummary = typeof chatSummaryRow?.value_text === "string" ? chatSummaryRow.value_text.trim() : "";
+          const chatLastOpsText = typeof chatLastOpsRow?.value_text === "string" ? chatLastOpsRow.value_text.trim() : "";
+          const chatTurnsParsed = safeJsonParse(typeof chatTurnsRow?.value_text === "string" ? chatTurnsRow.value_text : "");
+          const chatTurns = Array.isArray(chatTurnsParsed) ? chatTurnsParsed : [];
+
+          let memorySection = "";
+          if (chatRollup || chatSummary || chatLastOpsText || chatTurns.length > 0) {
+            const lines = [];
+            lines.push("Chat memory (kv __run__):");
+            if (chatRollup) lines.push(`- rolling_summary: ${truncateText(chatRollup, 800)}`);
+            if (chatSummary) lines.push(`- summary: ${truncateText(chatSummary, 400)}`);
+            if (chatLastOpsText) lines.push(`- last_ops: ${truncateText(chatLastOpsText, 800)}`);
+            if (chatTurns.length > 0) {
+              lines.push("- recent turns:");
+              const recentTurns = chatTurns.slice(Math.max(0, chatTurns.length - 6));
+              for (const t of recentTurns) {
+                const u = truncateText(t?.user || "", 200);
+                const a = truncateText(t?.reply || "", 200);
+                if (u) lines.push(`  - user: ${u}`);
+                if (a) lines.push(`    assistant: ${a}`);
+              }
+            }
+            memorySection = lines.join("\n");
+          }
+
+	          const prompt =
+	            `You are Choreo Chat Router.\n` +
+	            `Return JSON in <result> with {status, summary, data:{reply, ops, rollup}}.\n` +
+	            `Allowed ops:\n` +
+	            `- {"type":"status"}\n` +
+            `- {"type":"control.pause"}\n` +
+            `- {"type":"control.resume"}\n` +
+            `- {"type":"control.setWorkers","workers":3}\n` +
+            `- {"type":"control.replan"}\n` +
+            `- {"type":"control.cancel","nodeId":"task-001"}\n` +
+            `- {"type":"node.add","id":"task-001","title":"...","nodeType":"task","parentId":"plan-000","status":"open","runner":null,"inputs":[{"nodeId":"task-000","key":"out.summary"}],"ownership":[{"resources":["__global__"],"mode":"read"}],"acceptance":["..."],"verify":["..."],"retryPolicy":{"maxAttempts":2},"dependsOn":["task-000"]}\n` +
+            `- {"type":"node.update","id":"task-001","title":"...","runner":null,"inputs":[],"ownership":[],"acceptance":[],"verify":[],"retryPolicy":{"maxAttempts":2},"force":false}\n` +
             `- {"type":"node.setStatus","id":"task-001","status":"open|done|failed|needs_human","force":false}\n` +
+            `- {"type":"dep.add","nodeId":"task-002","dependsOnId":"task-001","requiredStatus":"done|terminal"}\n` +
+            `- {"type":"dep.remove","nodeId":"task-002","dependsOnId":"task-001"}\n` +
             `- {"type":"run.start"}\n` +
             `- {"type":"run.stop","signal":"SIGTERM"}\n` +
-            `Rules:\n` +
-            `- Prefer ops for status checks and simple replanning.\n` +
-            `- If unclear, ask one clarifying question in reply and ops=[].\n` +
+	            `Rules:\n` +
+	            `- Do not tell the user to run CLI commands; emit ops and Choreo will execute them.\n` +
+	            `- Use control.* ops for supervisor controls (pause/resume/workers/replan/cancel).\n` +
+	            `- Always include data.rollup as an updated rolling summary (<= 800 chars). If Chat memory includes rolling_summary, update it.\n` +
+	            `- Prefer ops for status checks and simple replanning.\n` +
+	            `- If unclear, ask one clarifying question in reply and ops=[].\n` +
+	            (memorySection ? `\n${memorySection}\n` : "\n") +
             `\n` +
             `State counts: ${JSON.stringify(counts)}\n` +
             `Next runnable: ${next ? formatNodeLine(next) : "(none)"}\n` +
@@ -3652,21 +3830,64 @@ async function chatCommand(rootDir, flags) {
           const opsRaw = data?.ops;
           const ops = Array.isArray(opsRaw) ? opsRaw : [];
           for (const op of ops) {
-            const type = typeof op?.type === "string" ? op.type.trim() : "";
-            if (!type) continue;
-            if (type === "status") {
-              await statusCommand(rootDir);
-              continue;
-            }
-            if (type === "node.add") {
-              await nodeCommand(rootDir, ["add"], {
-                id: typeof op.id === "string" ? op.id : "",
-                title: typeof op.title === "string" ? op.title : "",
-                type: typeof op.nodeType === "string" ? op.nodeType : "task",
+              const type = typeof op?.type === "string" ? op.type.trim() : "";
+              if (!type) continue;
+              if (type === "status") {
+                await statusCommand(rootDir);
+                continue;
+              }
+              if (type === "control.pause") {
+                await controlCommand(rootDir, ["pause"], {});
+                continue;
+              }
+              if (type === "control.resume") {
+                await controlCommand(rootDir, ["resume"], {});
+                continue;
+              }
+              if (type === "control.setWorkers") {
+                await controlCommand(rootDir, ["set-workers"], { workers: op?.workers });
+                continue;
+              }
+              if (type === "control.replan") {
+                await controlCommand(rootDir, ["replan"], {});
+                continue;
+              }
+              if (type === "control.cancel") {
+                await controlCommand(rootDir, ["cancel"], { node: typeof op?.nodeId === "string" ? op.nodeId : "" });
+                continue;
+              }
+              if (type === "node.add") {
+                await nodeCommand(rootDir, ["add"], {
+                  id: typeof op.id === "string" ? op.id : "",
+                  title: typeof op.title === "string" ? op.title : "",
+                  type: typeof op.nodeType === "string" ? op.nodeType : "task",
                 status: typeof op.status === "string" ? op.status : "open",
                 parent: typeof op.parentId === "string" ? op.parentId : "plan-000",
                 runner: typeof op.runner === "string" ? op.runner : "",
+                inputs: op?.inputs,
+                ownership: op?.ownership,
+                acceptance: op?.acceptance,
+                verify: op?.verify,
+                retryPolicy: op?.retryPolicy,
+                dependsOn: op?.dependsOn,
               });
+              continue;
+            }
+            if (type === "node.update") {
+              const updateFlags = {
+                id: typeof op.id === "string" ? op.id : "",
+                force: Boolean(op.force),
+              };
+              if (Object.prototype.hasOwnProperty.call(op, "title") && typeof op.title === "string") updateFlags.title = op.title;
+              if (Object.prototype.hasOwnProperty.call(op, "nodeType") && typeof op.nodeType === "string") updateFlags.type = op.nodeType;
+              if (Object.prototype.hasOwnProperty.call(op, "parentId") && typeof op.parentId === "string") updateFlags.parent = op.parentId;
+              if (Object.prototype.hasOwnProperty.call(op, "runner")) updateFlags.runner = typeof op.runner === "string" ? op.runner : "";
+              if (Object.prototype.hasOwnProperty.call(op, "inputs")) updateFlags.inputs = op.inputs;
+              if (Object.prototype.hasOwnProperty.call(op, "ownership")) updateFlags.ownership = op.ownership;
+              if (Object.prototype.hasOwnProperty.call(op, "acceptance")) updateFlags.acceptance = op.acceptance;
+              if (Object.prototype.hasOwnProperty.call(op, "verify")) updateFlags.verify = op.verify;
+              if (Object.prototype.hasOwnProperty.call(op, "retryPolicy")) updateFlags.retryPolicy = op.retryPolicy;
+              await nodeCommand(rootDir, ["update"], updateFlags);
               continue;
             }
             if (type === "node.setStatus") {
@@ -3674,6 +3895,21 @@ async function chatCommand(rootDir, flags) {
                 id: typeof op.id === "string" ? op.id : "",
                 status: typeof op.status === "string" ? op.status : "",
                 force: Boolean(op.force),
+              });
+              continue;
+            }
+            if (type === "dep.add") {
+              await depCommand(rootDir, ["add"], {
+                node: typeof op.nodeId === "string" ? op.nodeId : "",
+                "depends-on": typeof op.dependsOnId === "string" ? op.dependsOnId : "",
+                "required-status": typeof op.requiredStatus === "string" ? op.requiredStatus : "",
+              });
+              continue;
+            }
+            if (type === "dep.remove") {
+              await depCommand(rootDir, ["remove"], {
+                node: typeof op.nodeId === "string" ? op.nodeId : "",
+                "depends-on": typeof op.dependsOnId === "string" ? op.dependsOnId : "",
               });
               continue;
             }
@@ -3685,6 +3921,28 @@ async function chatCommand(rootDir, flags) {
               await stopCommand(rootDir, { ...flags, signal: typeof op.signal === "string" ? op.signal : undefined });
               continue;
             }
+          }
+
+          try {
+            const now = nowIso();
+            const storedOpsText = JSON.stringify(ops);
+            const turn = {
+              at: now,
+              user: truncateText(line, 800),
+              reply: truncateText(reply, 1200),
+              ops: ops.map((o) => (typeof o?.type === "string" ? o.type : null)).filter(Boolean),
+            };
+            const nextTurns = chatTurns.concat([turn]).slice(-10);
+
+            const rollup = typeof data?.rollup === "string" ? data.rollup.trim() : "";
+            if (rollup) {
+              await kvPut({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.rollup", valueText: truncateText(rollup, 4000), nowIso: now });
+            }
+            await kvPut({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.summary", valueText: truncateText(reply, 400), nowIso: now });
+            await kvPut({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.last_ops", valueText: truncateText(storedOpsText, 4000), nowIso: now });
+            await kvPut({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.turns", valueText: JSON.stringify(nextTurns), nowIso: now });
+          } catch (error) {
+            process.stdout.write(`Chat memory error: ${error?.message || String(error)}\n`);
           }
         } catch (error) {
           process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
@@ -3746,19 +4004,104 @@ async function nodeCommand(rootDir, positional, flags) {
     const parentId = typeof flags.parent === "string" ? flags.parent.trim() : "";
     const runner = typeof flags.runner === "string" ? flags.runner.trim() : "";
 
+    const defaultRetryPolicy = resolveDefaultRetryPolicy(config) ?? { maxAttempts: 3 };
+    const inputs = parseJsonArrayFlag(flags.inputs, [], "inputs");
+    const ownership = parseJsonArrayFlag(flags.ownership, [], "ownership");
+    const acceptance = parseJsonArrayFlag(flags.acceptance, [], "acceptance");
+    const verify = parseJsonArrayFlag(flags.verify, [], "verify");
+
+    const retryPolicyRaw = Object.prototype.hasOwnProperty.call(flags, "retryPolicy") ? flags.retryPolicy : flags["retry-policy"];
+    const retryPolicy = parseRetryPolicyFlag(retryPolicyRaw, defaultRetryPolicy);
+
+    const dependsOnRaw = Object.prototype.hasOwnProperty.call(flags, "dependsOn") ? flags.dependsOn : flags["depends-on"];
+    const dependsOn = parseDependsOnFlag(dependsOnRaw);
+
     const now = nowIso();
     await sqliteExec(
       paths.dbPath,
       `BEGIN IMMEDIATE;\n` +
         `INSERT OR IGNORE INTO nodes(\n` +
-        `  id, title, type, status, parent_id, runner,\n` +
+        `  id, title, type, status, parent_id,\n` +
+        `  runner,\n` +
+        `  inputs_json, ownership_json, acceptance_json, verify_json,\n` +
+        `  retry_policy_json, attempts,\n` +
         `  created_at, updated_at\n` +
         `)\n` +
         `VALUES(\n` +
         `  ${sqlQuote(id)}, ${sqlQuote(title)}, ${sqlQuote(type)}, ${sqlQuote(status)}, ${parentId ? sqlQuote(parentId) : "NULL"},\n` +
         `  ${runner ? sqlQuote(runner) : "NULL"},\n` +
+        `  ${sqlQuote(stableJsonSig(inputs, "[]"))}, ${sqlQuote(stableJsonSig(ownership, "[]"))}, ${sqlQuote(stableJsonSig(acceptance, "[]"))}, ${sqlQuote(stableJsonSig(verify, "[]"))},\n` +
+        `  ${sqlQuote(stableJsonSig(retryPolicy, stableJsonSig(defaultRetryPolicy, '{"maxAttempts":3}')))}, 0,\n` +
         `  ${sqlQuote(now)}, ${sqlQuote(now)}\n` +
         `);\n` +
+        dependsOn.map((depId) => `INSERT OR IGNORE INTO deps(node_id, depends_on_id) VALUES(${sqlQuote(id)}, ${sqlQuote(depId)});\n`).join("") +
+        `COMMIT;\n`,
+    );
+
+    const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+    await syncTaskPlan({ paths, graph });
+    return;
+  }
+
+  if (sub === "update") {
+    const id = typeof flags.id === "string" ? flags.id.trim() : "";
+    if (!id) throw new Error("Missing --id.");
+
+    const force = Boolean(flags.force);
+    const rows = await sqliteQueryJson(paths.dbPath, `SELECT lock_run_id FROM nodes WHERE id=${sqlQuote(id)} LIMIT 1;\n`);
+    const lockRunId = rows[0]?.lock_run_id ?? null;
+    if (lockRunId && !force) throw new Error(`Refusing to update locked node ${id} without --force.`);
+
+    const updates = [];
+    if (Object.prototype.hasOwnProperty.call(flags, "title") && typeof flags.title === "string") {
+      updates.push(`title=${sqlQuote(flags.title)}`);
+    }
+    if (Object.prototype.hasOwnProperty.call(flags, "type") && typeof flags.type === "string") {
+      updates.push(`type=${sqlQuote(flags.type.trim() || "task")}`);
+    }
+    if (Object.prototype.hasOwnProperty.call(flags, "parent") && typeof flags.parent === "string") {
+      const parentId = flags.parent.trim();
+      updates.push(`parent_id=${parentId ? sqlQuote(parentId) : "NULL"}`);
+    }
+    if (Object.prototype.hasOwnProperty.call(flags, "runner")) {
+      const runner = typeof flags.runner === "string" ? flags.runner.trim() : "";
+      updates.push(`runner=${runner ? sqlQuote(runner) : "NULL"}`);
+    }
+    if (Object.prototype.hasOwnProperty.call(flags, "inputs")) {
+      const inputs = parseJsonArrayFlag(flags.inputs, [], "inputs");
+      updates.push(`inputs_json=${sqlQuote(stableJsonSig(inputs, "[]"))}`);
+    }
+    if (Object.prototype.hasOwnProperty.call(flags, "ownership")) {
+      const ownership = parseJsonArrayFlag(flags.ownership, [], "ownership");
+      updates.push(`ownership_json=${sqlQuote(stableJsonSig(ownership, "[]"))}`);
+    }
+    if (Object.prototype.hasOwnProperty.call(flags, "acceptance")) {
+      const acceptance = parseJsonArrayFlag(flags.acceptance, [], "acceptance");
+      updates.push(`acceptance_json=${sqlQuote(stableJsonSig(acceptance, "[]"))}`);
+    }
+    if (Object.prototype.hasOwnProperty.call(flags, "verify")) {
+      const verify = parseJsonArrayFlag(flags.verify, [], "verify");
+      updates.push(`verify_json=${sqlQuote(stableJsonSig(verify, "[]"))}`);
+    }
+    const hasRetryPolicy =
+      Object.prototype.hasOwnProperty.call(flags, "retryPolicy") || Object.prototype.hasOwnProperty.call(flags, "retry-policy");
+    if (hasRetryPolicy) {
+      const defaultRetryPolicy = resolveDefaultRetryPolicy(config) ?? { maxAttempts: 3 };
+      const retryPolicyRaw = Object.prototype.hasOwnProperty.call(flags, "retryPolicy") ? flags.retryPolicy : flags["retry-policy"];
+      const retryPolicy = parseRetryPolicyFlag(retryPolicyRaw, defaultRetryPolicy);
+      updates.push(`retry_policy_json=${sqlQuote(stableJsonSig(retryPolicy, stableJsonSig(defaultRetryPolicy, '{"maxAttempts":3}')))}`);
+    }
+
+    if (updates.length === 0) throw new Error("No updates specified.");
+
+    const now = nowIso();
+    await sqliteExec(
+      paths.dbPath,
+      `BEGIN IMMEDIATE;\n` +
+        `UPDATE nodes\n` +
+        `SET ${updates.join(",\n    ")},\n` +
+        `    updated_at=${sqlQuote(now)}\n` +
+        `WHERE id=${sqlQuote(id)};\n` +
         `COMMIT;\n`,
     );
 
@@ -3806,6 +4149,80 @@ async function nodeCommand(rootDir, positional, flags) {
   }
 
   throw new Error(`Unknown node subcommand: ${sub}`);
+}
+
+async function depCommand(rootDir, positional, flags) {
+  const paths = choreoPaths(rootDir);
+  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .choreo/state.sqlite. Run `choreo init`.");
+  await ensureDepsRequiredStatusColumn({ dbPath: paths.dbPath });
+
+  const sub = String(positional?.[0] || "").trim();
+  if (!sub) throw new Error("Missing dep subcommand. Use `choreo dep add` or `choreo dep remove`.");
+
+  const nodeIdRaw =
+    typeof flags.node === "string"
+      ? flags.node
+      : typeof flags.id === "string"
+        ? flags.id
+        : typeof flags.nodeId === "string"
+          ? flags.nodeId
+          : "";
+  const nodeId = String(nodeIdRaw || "").trim();
+  if (!nodeId) throw new Error("Missing --node=<id>.");
+
+  const dependsOnIdRaw =
+    typeof flags["depends-on"] === "string"
+      ? flags["depends-on"]
+      : typeof flags.dependsOnId === "string"
+        ? flags.dependsOnId
+        : typeof flags.dep === "string"
+          ? flags.dep
+          : "";
+  const dependsOnId = String(dependsOnIdRaw || "").trim();
+  if (!dependsOnId) throw new Error("Missing --depends-on=<id>.");
+
+  const now = nowIso();
+  if (sub === "add") {
+    const requiredRaw =
+      typeof flags["required-status"] === "string"
+        ? flags["required-status"]
+        : typeof flags.requiredStatus === "string"
+          ? flags.requiredStatus
+          : "";
+    const requiredStatus = String(requiredRaw || "").trim().toLowerCase() || "done";
+    if (requiredStatus !== "done" && requiredStatus !== "terminal") {
+      throw new Error("Invalid --required-status. Use done|terminal.");
+    }
+
+    await sqliteExec(
+      paths.dbPath,
+      `BEGIN IMMEDIATE;\n` +
+        `INSERT INTO deps(node_id, depends_on_id, required_status)\n` +
+        `VALUES(${sqlQuote(nodeId)}, ${sqlQuote(dependsOnId)}, ${sqlQuote(requiredStatus)})\n` +
+        `ON CONFLICT(node_id, depends_on_id)\n` +
+        `DO UPDATE SET required_status=excluded.required_status;\n` +
+        `COMMIT;\n`,
+    );
+
+    const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+    await syncTaskPlan({ paths, graph });
+    return;
+  }
+
+  if (sub === "remove") {
+    await sqliteExec(
+      paths.dbPath,
+      `BEGIN IMMEDIATE;\n` +
+        `DELETE FROM deps WHERE node_id=${sqlQuote(nodeId)} AND depends_on_id=${sqlQuote(dependsOnId)};\n` +
+        `COMMIT;\n`,
+    );
+
+    const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+    await syncTaskPlan({ paths, graph });
+    return;
+  }
+
+  throw new Error(`Unknown dep subcommand: ${sub}`);
 }
 
 async function controlCommand(rootDir, positional, flags) {
@@ -3926,6 +4343,11 @@ export async function main(argv) {
 
   if (command === "node") {
     await nodeCommand(rootDir, positional, flags);
+    return;
+  }
+
+  if (command === "dep") {
+    await depCommand(rootDir, positional, flags);
     return;
   }
 

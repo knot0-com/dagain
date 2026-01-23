@@ -13,6 +13,7 @@ Early MVP scaffolding.
 - `choreo start "your goal..."` — explicit start command
 - `choreo init` — create `.choreo/` state + starter `GOAL.md`
 - `choreo goal --goal "..."` — refine `GOAL.md` interactively via configured runner (`--live` streams runner output)
+- `choreo chat` — interactive chat REPL; free-form messages are routed via the planner runner and applied as safe ops (also persists lightweight chat memory in KV under `__run__:chat.*`)
 - `choreo status` — show graph/queue status
 - `choreo run` — run the supervisor loop (`--live` streams runner output)
 - `choreo resume` — alias for `choreo run`
@@ -35,6 +36,7 @@ Early MVP scaffolding.
 Project state is stored in:
 
 - `.choreo/config.json` — runner + role configuration
+- `.choreo/state.sqlite` — SQLite workgraph + KV + mailbox (incl. `__run__:chat.*` chat memory)
 - `.choreo/workgraph.json` — work DAG + statuses/locks
 - `.choreo/lock` — supervisor lock (prevents concurrent supervisors; supports `choreo stop`)
 - `.choreo/runs/` — per-run packets + logs + results

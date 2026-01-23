@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+
+import { sqliteJson } from "./helpers/sqlite.js";
 
 function runCli({ binPath, cwd, args }) {
   return new Promise((resolve, reject) => {
@@ -43,10 +45,11 @@ function runCliInteractive({ binPath, cwd, args, input }) {
   });
 }
 
-test("chat: /pause enqueues a control command", async () => {
+test("chat: persists KV chat memory and injects it next run", async () => {
   const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
   const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-chat-controls-"));
+  const routerPath = fileURLToPath(new URL("../scripts/mock-chat-router-memory.js", import.meta.url));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-chat-kv-memory-"));
 
   const initRes = await runCli({
     binPath,
@@ -55,34 +58,57 @@ test("chat: /pause enqueues a control command", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const res = await runCliInteractive({
+  const configPath = path.join(tmpDir, ".choreo", "config.json");
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        version: 1,
+        runners: {
+          mock: { cmd: `node ${routerPath} {packet}` },
+        },
+        roles: {
+          main: "mock",
+          planner: "mock",
+          executor: "mock",
+          verifier: "mock",
+          integrator: "mock",
+          finalVerifier: "mock",
+          researcher: "mock",
+        },
+        supervisor: { idleSleepMs: 0, staleLockSeconds: 3600 },
+      },
+      null,
+      2,
+    ) + "\n",
+    "utf8",
+  );
+
+  const first = await runCliInteractive({
     binPath,
     cwd: tmpDir,
-    args: ["chat", "--no-llm", "--no-color"],
-    input: "/pause\n/exit\n",
+    args: ["chat", "--runner", "mock", "--no-color"],
+    input: "hello\n/exit\n",
   });
-  assert.equal(res.code, 0, res.stderr || res.stdout);
-  assert.match(res.stdout, /Enqueued pause/);
+  assert.equal(first.code, 0, first.stderr || first.stdout);
+  assert.match(first.stdout, /no-memory/);
+
+  const dbPath = path.join(tmpDir, ".choreo", "state.sqlite");
+  const rows = await sqliteJson(
+    dbPath,
+    "SELECT node_id, key, value_text FROM kv_latest WHERE node_id='__run__' AND key IN ('chat.turns','chat.summary','chat.last_ops') ORDER BY key;",
+  );
+  const keys = rows.map((r) => String(r.key));
+  assert.deepEqual(keys, ["chat.last_ops", "chat.summary", "chat.turns"]);
+  assert.match(String(rows.find((r) => r.key === "chat.turns")?.value_text || ""), /hello/);
+
+  const second = await runCliInteractive({
+    binPath,
+    cwd: tmpDir,
+    args: ["chat", "--runner", "mock", "--no-color"],
+    input: "hi again\n/exit\n",
+  });
+  assert.equal(second.code, 0, second.stderr || second.stdout);
+  assert.match(second.stdout, /memory-seen/);
 });
 
-test("chat: natural language 'pause launching' works without LLM", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-chat-controls-nl-"));
-
-  const initRes = await runCli({
-    binPath,
-    cwd: tmpDir,
-    args: ["init", "--goal", "X", "--no-refine", "--force", "--no-color"],
-  });
-  assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
-
-  const res = await runCliInteractive({
-    binPath,
-    cwd: tmpDir,
-    args: ["chat", "--no-llm", "--no-color"],
-    input: "pause launching\n/exit\n",
-  });
-  assert.equal(res.code, 0, res.stderr || res.stdout);
-  assert.match(res.stdout, /Enqueued pause/);
-});

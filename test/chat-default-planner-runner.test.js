@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 function runCli({ binPath, cwd, args }) {
@@ -43,10 +43,11 @@ function runCliInteractive({ binPath, cwd, args, input }) {
   });
 }
 
-test("chat: /pause enqueues a control command", async () => {
+test("chat: defaults to planner runner for NL routing", async () => {
   const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
   const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-chat-controls-"));
+  const mockAgentPath = fileURLToPath(new URL("../scripts/mock-agent-marker.js", import.meta.url));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-chat-default-planner-"));
 
   const initRes = await runCli({
     binPath,
@@ -55,34 +56,41 @@ test("chat: /pause enqueues a control command", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
+  const configPath = path.join(tmpDir, ".choreo", "config.json");
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        version: 1,
+        runners: {
+          mockPlanner: { cmd: `node ${mockAgentPath} planner {packet}` },
+          mockResearcher: { cmd: `node ${mockAgentPath} researcher {packet}` },
+        },
+        roles: {
+          main: "mockResearcher",
+          planner: "mockPlanner",
+          researcher: "mockResearcher",
+        },
+        supervisor: {
+          idleSleepMs: 0,
+          staleLockSeconds: 3600,
+        },
+      },
+      null,
+      2,
+    ) + "\n",
+    "utf8",
+  );
+
   const res = await runCliInteractive({
     binPath,
     cwd: tmpDir,
-    args: ["chat", "--no-llm", "--no-color"],
-    input: "/pause\n/exit\n",
+    args: ["chat", "--no-color"],
+    input: "hello\n/exit\n",
   });
   assert.equal(res.code, 0, res.stderr || res.stdout);
-  assert.match(res.stdout, /Enqueued pause/);
+
+  const marker = await readFile(path.join(tmpDir, "runner_marker.txt"), "utf8");
+  assert.equal(marker.trim(), "planner");
 });
 
-test("chat: natural language 'pause launching' works without LLM", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-chat-controls-nl-"));
-
-  const initRes = await runCli({
-    binPath,
-    cwd: tmpDir,
-    args: ["init", "--goal", "X", "--no-refine", "--force", "--no-color"],
-  });
-  assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
-
-  const res = await runCliInteractive({
-    binPath,
-    cwd: tmpDir,
-    args: ["chat", "--no-llm", "--no-color"],
-    input: "pause launching\n/exit\n",
-  });
-  assert.equal(res.code, 0, res.stderr || res.stdout);
-  assert.match(res.stdout, /Enqueued pause/);
-});

@@ -206,6 +206,7 @@ test("mailbox: set-workers downscales concurrency", { timeout: 25_000 }, async (
         version: 1,
         runners: {
           mockExecutor: { cmd: `MOCK_SLEEP_MS=350 node ${mockSleepAgentPath} executor` },
+          mockExecutorSlow: { cmd: `MOCK_SLEEP_MS=1000 node ${mockSleepAgentPath} executor` },
           mockVerifier: { cmd: `node ${mockSleepAgentPath} verifier` },
           mockIntegrator: { cmd: `node ${mockSleepAgentPath} integrator` },
           mockFinalVerifier: { cmd: `node ${mockSleepAgentPath} finalVerifier` },
@@ -232,6 +233,7 @@ test("mailbox: set-workers downscales concurrency", { timeout: 25_000 }, async (
   await seedTask(dbPath, { id: "task-1", title: "t1", ownership: ["t1.txt"] });
   await seedTask(dbPath, { id: "task-2", title: "t2", ownership: ["t2.txt"] });
   await seedTask(dbPath, { id: "task-3", title: "t3", ownership: ["t3.txt"] });
+  await sqliteExec(dbPath, "UPDATE nodes SET runner='mockExecutorSlow' WHERE id='task-2';\n");
 
   const { child, done } = spawnCli({
     binPath,
@@ -255,13 +257,11 @@ test("mailbox: set-workers downscales concurrency", { timeout: 25_000 }, async (
 
     await waitFor(async () => {
       const rows = await sqliteJson(dbPath, "SELECT id, status FROM nodes WHERE id LIKE 'task-%' ORDER BY id;");
-      const inProgress = rows.filter((r) => r.status === "in_progress").map((r) => r.id);
-      const done = rows.filter((r) => r.status === "done").map((r) => r.id);
-      return done.length >= 1 && inProgress.length === 1;
+      return nodeStatus(rows, "task-1") === "done" && nodeStatus(rows, "task-2") === "in_progress" && nodeStatus(rows, "task-3") === "open";
     });
 
     await new Promise((r) => setTimeout(r, 200));
-    const rowsAfter = await sqliteJson(dbPath, "SELECT id, status FROM nodes WHERE id='task-3' LIMIT 1;");
+    const rowsAfter = await sqliteJson(dbPath, "SELECT status FROM nodes WHERE id='task-3' LIMIT 1;");
     assert.equal(rowsAfter[0]?.status, "open");
 
     const runRes = await done;
