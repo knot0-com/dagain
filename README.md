@@ -147,6 +147,14 @@ Taskgraph stores state in:
 gh repo create knot0/taskgraph --public --source=. --remote=origin --push
 ```
 
+If you don’t have permission to create repos in `knot0`, create a staging repo under your user and transfer it:
+
+```bash
+gh repo create <you>/taskgraph --public --source=. --remote=origin --push
+```
+
+Then transfer via GitHub UI: **Settings → General → Transfer ownership**.
+
 ### npm + npx
 
 1) Ensure you’re logged in:
@@ -166,4 +174,3 @@ Then:
 ```bash
 npx taskgraph --help
 ```
-
