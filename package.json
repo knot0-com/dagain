@@ -22,5 +22,13 @@
     "llm",
     "orchestration",
     "taskgraph"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/knot0/taskgraph.git"
+  },
+  "bugs": {
+    "url": "https://github.com/knot0/taskgraph/issues"
+  },
+  "homepage": "https://github.com/knot0/taskgraph"
 }
