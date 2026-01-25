@@ -1,98 +1,169 @@
-# choreo
+# taskgraph
 
-Goal-driven, runner-agnostic orchestration for coding agents (Codex, Claude Code, Gemini).
+DAG-based orchestration for coding agents (Codex, Claude Code, Gemini).
 
-## Status
+Taskgraph runs a **work graph** (nodes + deps) stored in **SQLite**, and executes each node with a configured runner. It’s built to keep agents “fresh”: context is loaded from the graph/DB when needed, not carried indefinitely in prompts.
 
-Early MVP scaffolding.
+> Back-compat: the repo/DB directory is currently `.choreo/` (legacy name). The CLI is `taskgraph` (alias: `choreo`).
 
-## CLI
+## Install
 
-- `choreo` — interactive start (TTY); prompts for a goal and runs until done/checkpoint
-- `choreo "your goal..."` — shorthand goal + start
-- `choreo start "your goal..."` — explicit start command
-- `choreo init` — create `.choreo/` state + starter `GOAL.md`
-- `choreo goal --goal "..."` — refine `GOAL.md` interactively via configured runner (`--live` streams runner output)
-- `choreo chat` — interactive chat REPL; free-form messages are routed via the planner runner and applied as safe ops (also persists lightweight chat memory in KV under `__run__:chat.*`)
-- `choreo status` — show graph/queue status
-- `choreo run` — run the supervisor loop (`--live` streams runner output)
-- `choreo resume` — alias for `choreo run`
-- `choreo answer` — answer a checkpoint and reopen the blocked node
-- `choreo stop` — gracefully stop a running supervisor (via `.choreo/lock`)
+Once published to npm:
 
-## Monitoring
+```bash
+npx taskgraph --help
+```
 
-- Primary (interactive): keep a TTY open running `choreo run --live` so you can see output and answer checkpoints.
-- Secondary (any terminal): `choreo status`, `tail -f .choreo/memory/activity.log`, and `tail -f .choreo/runs/<run>/stdout.log` (the run log path is printed on spawn).
+Or install globally:
 
-## Resuming
+```bash
+npm i -g taskgraph
+taskgraph --help
+```
 
-- Choreo is resumable by design: rerun `choreo run` (or `choreo`) in the same repo/worktree; it continues from `.choreo/workgraph.json`.
-- If interrupted mid-node, the node lock includes the supervisor PID; on restart, dead locks are cleared and the node is retried.
-- `Ctrl+C` (SIGINT) or `choreo stop` (SIGTERM) cancels the current runner, unlocks the node, and exits so you can resume later.
+## Quickstart (in a repo you want to work on)
 
-## State
+```bash
+# 1) init state + config (creates .choreo/)
+taskgraph init --goal "Add a CLI flag --foo and tests" --no-refine
 
-Project state is stored in:
+# 2) run the supervisor (streams runner output)
+taskgraph run --live
+
+# 3) in another terminal: check status / interact
+taskgraph status
+taskgraph chat
+```
+
+### Common chat controls
+
+Inside `taskgraph chat`:
+
+- `/status` — print graph status
+- `/run` — start supervisor
+- `/pause` / `/resume` — stop/resume launching new nodes (in-flight nodes finish)
+- `/workers <n>` — set concurrency
+- `/replan` — force plan node (`plan-000`) to reopen and block launches until it completes
+- `/cancel <nodeId>` — cancel a running node (best-effort)
+- `/memory` / `/forget` — inspect/reset chat memory stored in SQLite KV
+
+## Concepts
+
+### Nodes and dependencies
+
+Taskgraph is a DAG of **nodes**:
+
+- `plan` nodes decompose goals into tasks
+- `task` nodes do work (code, analysis, etc)
+- `verify` nodes check task outputs
+- `integrate` nodes merge/roll up results
+- `final_verify` nodes do final checks
+
+Dependencies live in the `deps` table. A dep can require:
+
+- `done` (default): upstream must be `done`
+- `terminal`: upstream must be terminal (`done` or `failed`) — useful for “investigate failure” / escalation flows
+
+### External memory (SQLite)
+
+All durable state is in `.choreo/state.sqlite`:
+
+- `nodes` / `deps` — the DAG and statuses
+- `kv_latest` / `kv_history` — durable “memory” and artifacts
+- `mailbox` — supervisor control queue (pause/resume/workers/replan/cancel)
+
+Chat memory is stored in KV under `node_id="__run__"`:
+
+- `chat.rollup` — rolling summary (router-maintained)
+- `chat.turns` — last ~10 turns
+- `chat.last_ops` — last emitted ops JSON
+- `chat.summary` — last assistant reply
+
+### Safety model: “ops, not commands”
+
+Taskgraph keeps the model from directly mutating state by having it emit **ops**. The host applies them safely.
+
+In `taskgraph chat`, the router can emit:
+
+- `control.*` ops (pause/resume/workers/replan/cancel)
+- `node.add`, `node.update`, `node.setStatus`
+- `dep.add`, `dep.remove`
+- `run.start`, `run.stop`, `status`
+
+## Runners (Codex / Claude / Gemini)
+
+Runners are just shell commands that receive a `{packet}` filepath and should print:
+
+```text
+<result>{...json...}</result>
+```
+
+Configure them in `.choreo/config.json`:
+
+```json
+{
+  "version": 1,
+  "runners": {
+    "codex":  { "cmd": "codex exec --yolo --skip-git-repo-check -" },
+    "claude": { "cmd": "claude --dangerously-skip-permissions -p \"$(cat {packet})\"" },
+    "gemini": { "cmd": "gemini -y -p \"$(cat {packet})\"" }
+  },
+  "roles": {
+    "planner": "codex",
+    "executor": "codex",
+    "verifier": "codex",
+    "integrator": "codex",
+    "finalVerifier": "codex"
+  }
+}
+```
+
+Notes:
+- Taskgraph strips Claude’s `--dangerously-skip-permissions` when running as root.
+- For speed, you can set `defaults.verifyRunner` to `shellVerify` so verification doesn’t use an LLM.
+
+## Parallelism and worktrees
+
+- `taskgraph run --workers N` runs up to `N` nodes concurrently (subject to ownership locks).
+- For conflict-prone code edits, set `supervisor.worktrees.mode="always"` to run executors in worktrees and merge serially.
+
+## State layout
+
+Taskgraph stores state in:
 
 - `.choreo/config.json` — runner + role configuration
-- `.choreo/state.sqlite` — SQLite workgraph + KV + mailbox (incl. `__run__:chat.*` chat memory)
-- `.choreo/workgraph.json` — work DAG + statuses/locks
-- `.choreo/lock` — supervisor lock (prevents concurrent supervisors; supports `choreo stop`)
-- `.choreo/runs/` — per-run packets + logs + results
+- `.choreo/state.sqlite` — workgraph + KV + mailbox
+- `.choreo/workgraph.json` — human-readable graph snapshot (mirrors SQLite)
+- `.choreo/lock` — supervisor lock (used by `taskgraph stop`)
+- `.choreo/runs/` — per-node packets + logs + results
 - `.choreo/checkpoints/` — human-in-the-loop checkpoints
-- `.choreo/memory/task_plan.md` — durable plan rendered from the workgraph
-- `.choreo/memory/findings.md` — durable findings/decisions across agents
-- `.choreo/memory/progress.md` — durable progress log across runs
-- `.choreo/memory/activity.log` / `.choreo/memory/errors.log` — append-only event + error logs
+- `.choreo/memory/` — durable notes + logs (`task_plan.md`, `findings.md`, `progress.md`)
 
-## Roles and Planning
+## Publishing
 
-- Nodes drive which roles run:
-  - `type: "plan"` → planner
-  - `type: "task"` → executor
-  - `type: "verify"` → verifier
-  - `type: "integrate"` → integrator
-  - `type: "final_verify"` → finalVerifier
-- To avoid “planner forgot to add verifiers”, choreo automatically scaffolds missing gates when a plan node succeeds:
-  - Adds `verify-*` nodes for each task (if missing)
-  - Adds an `integrate-*` node (if missing)
-  - Adds a `final-verify-*` node (if missing)
+### GitHub (knot0 org)
 
-## Run Modes (analysis vs coding)
+```bash
+gh repo create knot0/taskgraph --public --source=. --remote=origin --push
+```
 
-Choreo infers a coarse **run mode** from `GOAL.md`:
+### npm + npx
 
-- `analysis` — data/metrics/report oriented runs (verify artifacts; avoid unrelated git merges/repo-wide test suites)
-- `coding` — code-change oriented runs (integration focuses on repo-wide correctness checks)
+1) Ensure you’re logged in:
 
-### Overrides
+```bash
+npm whoami
+```
 
-- In `GOAL.md`, add a line: `Run mode: analysis` or `Run mode: coding`
-- In `.choreo/config.json`, set: `supervisor.runMode` to `analysis` or `coding`
+2) Publish:
 
-### How runners see it
+```bash
+npm publish --access public
+```
 
-- Template var: `{{RUN_MODE}}` (included in node packets)
-- Env var: `CHOREO_RUN_MODE` (available to runner processes)
+Then:
 
-Choreo ships mode-specific templates for analysis runs:
-- `.choreo/templates/integrator-analysis.md`
-- `.choreo/templates/final-verifier-analysis.md`
+```bash
+npx taskgraph --help
+```
 
-## Multiple Runners per Role
-
-- `.choreo/config.json` roles can be a string or a list of runner names:
-  - `"verifier": "codex"` or `"verifier": ["codex", "gemini"]`
-  - CLI flags accept comma-separated lists: `--verifier=codex,gemini`
-- By default, choreo picks one runner deterministically per node (hash of node id + attempt).
-- To run multiple independent verifiers for every task, set:
-  - `"supervisor": { "multiVerifier": "all" }`
-  - `"roles": { "verifier": ["codex", "gemini"] }`
-  - choreo will create one verify node per verifier runner and pin it via `node.runner`.
-
-## Performance
-
-- Default verify nodes can run as a non‑LLM shell runner (`defaults.verifyRunner`).
-- `supervisor.packetMode="thin"` reduces repeated context sent to executors/verifiers/integrators.
-- See `docs/fast-config.md` for a recommended “fast profile”.

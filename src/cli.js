@@ -36,34 +36,34 @@ import {
 	} from "./lib/db/nodes.js";
 
 function usage() {
-  return `choreo
+  return `taskgraph
 
 Usage:
-  choreo [<goal...>] [--color] [--no-color]
-  choreo chat [--no-color]
-  choreo control pause|resume
-  choreo control set-workers --workers=<n>
-  choreo control replan
-  choreo control cancel --node=<id>
-  choreo node add --id=<id> --title="..." [--type=<t>] [--status=<s>] [--parent=<id>] [--runner=<name>] [--inputs=<json>] [--ownership=<json>] [--acceptance=<json>] [--verify=<json>] [--retry-policy=<json>] [--depends-on=<json|a,b>]
-  choreo node update --id=<id> [--title="..."] [--type=<t>] [--parent=<id>] [--runner=<name>] [--inputs=<json>] [--ownership=<json>] [--acceptance=<json>] [--verify=<json>] [--retry-policy=<json>] [--force]
-  choreo node set-status --id=<id> --status=<open|done|failed|needs_human> [--force]
-  choreo dep add --node=<id> --depends-on=<id> [--required-status=<done|terminal>]
-  choreo dep remove --node=<id> --depends-on=<id>
-  choreo start [<goal...>] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
-  choreo init [--force] [--no-templates] [--goal="..."] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
-		  choreo goal [--goal="..."] [--max-turns=<n>] [--runner=<name>] [--live] [--no-live] [--color] [--no-color]
-		  choreo status
-	  choreo run [--once] [--workers=<n>] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
-	  choreo resume [--once] [--workers=<n>] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
-	  choreo answer [--node=<id>] [--checkpoint=<file>] [--answer="..."] [--no-prompt]
-	  choreo kv get [--run] [--node=<id>] --key=<k> [--json]
-	  choreo kv put [--run] [--node=<id>] --key=<k> --value="..." [--allow-cross-node-write]
-	  choreo kv ls [--run] [--node=<id>] [--prefix=<p>] [--json]
-  choreo microcall --prompt="..." [--runner=<name>] [--role=<role>] [--store-key=<k>] [--run] [--json]
-  choreo templates sync [--force]
-		  choreo stop [--signal=<sig>]
-		  choreo graph validate
+  taskgraph [<goal...>] [--color] [--no-color]
+  taskgraph chat [--no-color]
+  taskgraph control pause|resume
+  taskgraph control set-workers --workers=<n>
+  taskgraph control replan
+  taskgraph control cancel --node=<id>
+  taskgraph node add --id=<id> --title="..." [--type=<t>] [--status=<s>] [--parent=<id>] [--runner=<name>] [--inputs=<json>] [--ownership=<json>] [--acceptance=<json>] [--verify=<json>] [--retry-policy=<json>] [--depends-on=<json|a,b>]
+  taskgraph node update --id=<id> [--title="..."] [--type=<t>] [--parent=<id>] [--runner=<name>] [--inputs=<json>] [--ownership=<json>] [--acceptance=<json>] [--verify=<json>] [--retry-policy=<json>] [--force]
+  taskgraph node set-status --id=<id> --status=<open|done|failed|needs_human> [--force]
+  taskgraph dep add --node=<id> --depends-on=<id> [--required-status=<done|terminal>]
+  taskgraph dep remove --node=<id> --depends-on=<id>
+  taskgraph start [<goal...>] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
+  taskgraph init [--force] [--no-templates] [--goal="..."] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
+		  taskgraph goal [--goal="..."] [--max-turns=<n>] [--runner=<name>] [--live] [--no-live] [--color] [--no-color]
+		  taskgraph status
+	  taskgraph run [--once] [--workers=<n>] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
+	  taskgraph resume [--once] [--workers=<n>] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
+	  taskgraph answer [--node=<id>] [--checkpoint=<file>] [--answer="..."] [--no-prompt]
+	  taskgraph kv get [--run] [--node=<id>] --key=<k> [--json]
+	  taskgraph kv put [--run] [--node=<id>] --key=<k> --value="..." [--allow-cross-node-write]
+	  taskgraph kv ls [--run] [--node=<id>] [--prefix=<p>] [--json]
+  taskgraph microcall --prompt="..." [--runner=<name>] [--role=<role>] [--store-key=<k>] [--run] [--json]
+  taskgraph templates sync [--force]
+		  taskgraph stop [--signal=<sig>]
+		  taskgraph graph validate
 
 State:
   .choreo/config.json
@@ -3566,7 +3566,7 @@ async function chatCommand(rootDir, flags) {
   if (!(await pathExists(paths.dbPath))) throw new Error("Missing .choreo/state.sqlite. Run `choreo init`.");
   const config = await loadConfig(paths.configPath);
   if (!config) throw new Error("Missing .choreo/config.json. Run `choreo init`.");
-  process.stdout.write("choreo chat (type /help)\n");
+  process.stdout.write("taskgraph chat (type /help)\n");
   const noLlm = Boolean(flags["no-llm"]) || Boolean(flags.noLlm);
   const runnerOverride = typeof flags.runner === "string" ? flags.runner.trim() : "";
   const roleOverride = typeof flags.role === "string" ? flags.role.trim() : "planner";
@@ -3591,7 +3591,7 @@ async function chatCommand(rootDir, flags) {
   }
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  rl.setPrompt("choreo> ");
+  rl.setPrompt("taskgraph> ");
   rl.prompt();
   try {
     for await (const lineRaw of rl) {
