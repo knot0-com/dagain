@@ -25,10 +25,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/jian-mo/taskgraph.git"
+    "url": "https://github.com/knot0-com/taskgraph.git"
   },
   "bugs": {
-    "url": "https://github.com/jian-mo/taskgraph/issues"
+    "url": "https://github.com/knot0-com/taskgraph/issues"
   },
-  "homepage": "https://github.com/jian-mo/taskgraph"
+  "homepage": "https://github.com/knot0-com/taskgraph"
 }

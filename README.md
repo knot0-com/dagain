@@ -141,13 +141,13 @@ Taskgraph stores state in:
 
 ## Publishing
 
-### GitHub (knot0 org)
+### GitHub (knot0-com org)
 
 ```bash
-gh repo create knot0/taskgraph --public --source=. --remote=origin --push
+gh repo create knot0-com/taskgraph --public --source=. --remote=origin --push
 ```
 
-If you don’t have permission to create repos in `knot0`, create a staging repo under your user and transfer it:
+If you don’t have permission to create repos in `knot0-com`, create a staging repo under your user and transfer it:
 
 ```bash
 gh repo create <you>/taskgraph --public --source=. --remote=origin --push
