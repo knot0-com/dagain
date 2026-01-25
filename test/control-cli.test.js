@@ -41,7 +41,7 @@ test("control: pause enqueues mailbox command", async () => {
   const pauseRes = await runCli({ binPath, cwd: tmpDir, args: ["control", "pause", "--no-color"] });
   assert.equal(pauseRes.code, 0, pauseRes.stderr || pauseRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".choreo", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
   const rows = await sqliteJson(dbPath, "SELECT command, status FROM mailbox ORDER BY id DESC LIMIT 1;");
   assert.equal(rows[0]?.command, "pause");
   assert.equal(rows[0]?.status, "pending");
@@ -62,7 +62,7 @@ test("control: set-workers stores args_json", async () => {
   const res = await runCli({ binPath, cwd: tmpDir, args: ["control", "set-workers", "--workers", "3", "--no-color"] });
   assert.equal(res.code, 0, res.stderr || res.stdout);
 
-  const dbPath = path.join(tmpDir, ".choreo", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
   const rows = await sqliteJson(dbPath, "SELECT command, args_json FROM mailbox ORDER BY id DESC LIMIT 1;");
   assert.equal(rows[0]?.command, "set_workers");
   assert.equal(JSON.parse(rows[0]?.args_json || "{}").workers, 3);

@@ -42,8 +42,8 @@ test("answer: updates sqlite state and reopens node", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".choreo", "state.sqlite");
-  const checkpointsDir = path.join(tmpDir, ".choreo", "checkpoints");
+  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const checkpointsDir = path.join(tmpDir, ".taskgraph", "checkpoints");
   await mkdir(checkpointsDir, { recursive: true });
 
   const checkpointPathAbs = path.join(checkpointsDir, "checkpoint-123.json");
@@ -87,7 +87,7 @@ test("answer: updates sqlite state and reopens node", async () => {
       `);\n`,
   );
 
-  const snapshotPath = path.join(tmpDir, ".choreo", "workgraph.json");
+  const snapshotPath = path.join(tmpDir, ".taskgraph", "workgraph.json");
   await rm(snapshotPath, { force: true });
 
   const answerRes = await runCli({

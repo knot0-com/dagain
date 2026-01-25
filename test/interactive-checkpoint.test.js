@@ -44,7 +44,7 @@ test("run: interactive checkpoint answer resumes and completes", { timeout: 10_0
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const configPath = path.join(tmpDir, ".choreo", "config.json");
+  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(

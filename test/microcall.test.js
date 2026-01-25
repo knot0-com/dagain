@@ -42,7 +42,7 @@ test("microcall: prints extracted result JSON", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const configPath = path.join(tmpDir, ".choreo", "config.json");
+  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(

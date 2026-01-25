@@ -39,7 +39,7 @@ test("mailbox: enqueue -> claim -> ack", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".choreo", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
   const now = new Date().toISOString();
 
   const enq = await mailboxEnqueue({ dbPath, command: "pause", args: null, nowIso: now });
@@ -73,7 +73,7 @@ test("mailbox: args_json persists for set-workers", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".choreo", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
   const now = new Date().toISOString();
 
   const enq = await mailboxEnqueue({ dbPath, command: "set_workers", args: { workers: 3 }, nowIso: now });

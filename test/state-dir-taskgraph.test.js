@@ -3,19 +3,14 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-
-import { exportWorkgraphJson } from "../src/lib/db/export.js";
 
 function runCli({ binPath, cwd, args }) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [binPath, ...args], {
       cwd,
-      env: {
-        ...process.env,
-        NO_COLOR: "1",
-      },
+      env: { ...process.env, NO_COLOR: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -29,10 +24,10 @@ function runCli({ binPath, cwd, args }) {
   });
 }
 
-test("exportWorkgraphJson: writes nodes snapshot from sqlite", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-export-"));
+test("init: uses .taskgraph/ as the state dir", async () => {
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "taskgraph.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "taskgraph-state-dir-"));
 
   const initRes = await runCli({
     binPath,
@@ -41,14 +36,7 @@ test("exportWorkgraphJson: writes nodes snapshot from sqlite", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
-  const snapshotPath = path.join(tmpDir, ".taskgraph", "workgraph.json");
-  await rm(snapshotPath, { force: true });
-
-  await exportWorkgraphJson({ dbPath, snapshotPath });
-
-  const snapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
-  assert.ok(Array.isArray(snapshot.nodes));
-  assert.ok(snapshot.nodes.some((n) => n.id === "plan-000"));
+  await stat(path.join(tmpDir, ".taskgraph", "config.json"));
+  await stat(path.join(tmpDir, ".taskgraph", "state.sqlite"));
 });
 

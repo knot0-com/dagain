@@ -4,7 +4,7 @@ DAG-based orchestration for coding agents (Codex, Claude Code, Gemini).
 
 Taskgraph runs a **work graph** (nodes + deps) stored in **SQLite**, and executes each node with a configured runner. It’s built to keep agents “fresh”: context is loaded from the graph/DB when needed, not carried indefinitely in prompts.
 
-> Back-compat: the repo/DB directory is currently `.choreo/` (legacy name). The CLI is `taskgraph` (alias: `choreo`).
+> Back-compat: if a legacy `.choreo/` state dir exists, Taskgraph migrates it to `.taskgraph/` and leaves a `.choreo` symlink. (CLI alias: `choreo`.)
 
 ## Install
 
@@ -24,7 +24,7 @@ taskgraph --help
 ## Quickstart (in a repo you want to work on)
 
 ```bash
-# 1) init state + config (creates .choreo/)
+# 1) init state + config (creates .taskgraph/)
 taskgraph init --goal "Add a CLI flag --foo and tests" --no-refine
 
 # 2) run the supervisor (streams runner output)
@@ -66,7 +66,7 @@ Dependencies live in the `deps` table. A dep can require:
 
 ### External memory (SQLite)
 
-All durable state is in `.choreo/state.sqlite`:
+All durable state is in `.taskgraph/state.sqlite`:
 
 - `nodes` / `deps` — the DAG and statuses
 - `kv_latest` / `kv_history` — durable “memory” and artifacts
@@ -98,7 +98,7 @@ Runners are just shell commands that receive a `{packet}` filepath and should pr
 <result>{...json...}</result>
 ```
 
-Configure them in `.choreo/config.json`:
+Configure them in `.taskgraph/config.json`:
 
 ```json
 {
@@ -131,13 +131,13 @@ Notes:
 
 Taskgraph stores state in:
 
-- `.choreo/config.json` — runner + role configuration
-- `.choreo/state.sqlite` — workgraph + KV + mailbox
-- `.choreo/workgraph.json` — human-readable graph snapshot (mirrors SQLite)
-- `.choreo/lock` — supervisor lock (used by `taskgraph stop`)
-- `.choreo/runs/` — per-node packets + logs + results
-- `.choreo/checkpoints/` — human-in-the-loop checkpoints
-- `.choreo/memory/` — durable notes + logs (`task_plan.md`, `findings.md`, `progress.md`)
+- `.taskgraph/config.json` — runner + role configuration
+- `.taskgraph/state.sqlite` — workgraph + KV + mailbox
+- `.taskgraph/workgraph.json` — human-readable graph snapshot (mirrors SQLite)
+- `.taskgraph/lock` — supervisor lock (used by `taskgraph stop`)
+- `.taskgraph/runs/` — per-node packets + logs + results
+- `.taskgraph/checkpoints/` — human-in-the-loop checkpoints
+- `.taskgraph/memory/` — durable notes + logs (`task_plan.md`, `findings.md`, `progress.md`)
 
 ## Publishing
 

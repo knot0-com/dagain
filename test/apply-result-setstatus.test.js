@@ -42,7 +42,7 @@ test("applyResult: next.setStatus can reopen a failed node", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".choreo", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
   const now = new Date().toISOString().replace(/'/g, "''");
   await sqliteExec(
     dbPath,

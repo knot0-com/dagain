@@ -58,7 +58,7 @@ test("chat: stores LLM-updated rolling summary in KV and injects it next run", a
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const configPath = path.join(tmpDir, ".choreo", "config.json");
+  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(
@@ -93,7 +93,7 @@ test("chat: stores LLM-updated rolling summary in KV and injects it next run", a
   assert.equal(first.code, 0, first.stderr || first.stdout);
   assert.match(first.stdout, /no-rollup/);
 
-  const dbPath = path.join(tmpDir, ".choreo", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
   const row1 = await sqliteJson(dbPath, "SELECT value_text FROM kv_latest WHERE node_id='__run__' AND key='chat.rollup' LIMIT 1;");
   assert.equal(row1[0]?.value_text, "S1");
 

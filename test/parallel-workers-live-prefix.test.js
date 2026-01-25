@@ -42,7 +42,7 @@ test("live: workers>1 prefixes runner output with node id", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const configPath = path.join(tmpDir, ".choreo", "config.json");
+  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(

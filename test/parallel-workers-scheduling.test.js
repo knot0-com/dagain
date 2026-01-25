@@ -42,7 +42,7 @@ test("run: workers>1 dispatches multiple executors before first exit", async () 
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const configPath = path.join(tmpDir, ".choreo", "config.json");
+  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(
@@ -86,7 +86,7 @@ test("run: workers>1 dispatches multiple executors before first exit", async () 
   assert.equal(runRes.code, 0, runRes.stderr || runRes.stdout);
   assert.match(runRes.stdout + runRes.stderr, /All nodes done\./);
 
-  const activityPath = path.join(tmpDir, ".choreo", "memory", "activity.log");
+  const activityPath = path.join(tmpDir, ".taskgraph", "memory", "activity.log");
   const activity = await readFile(activityPath, "utf8");
 
   const spawnA = activity.indexOf("spawn role=executor");

@@ -66,7 +66,7 @@ test("node: add and set-status", async () => {
   });
   assert.equal(addRes.code, 0, addRes.stderr || addRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".choreo", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
   const rows = await sqliteJson(dbPath, "SELECT id, title, type, status, parent_id FROM nodes WHERE id='task-001';");
   assert.equal(rows[0]?.id, "task-001");
   assert.equal(rows[0]?.title, "T");

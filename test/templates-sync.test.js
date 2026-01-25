@@ -36,7 +36,7 @@ test("templates sync: overwrites only with --force", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const target = path.join(tmpDir, ".choreo", "templates", "integrator-analysis.md");
+  const target = path.join(tmpDir, ".taskgraph", "templates", "integrator-analysis.md");
   const original = await readFile(target, "utf8");
   assert.match(original, /Integrator\s*\(Analysis\)/i);
 

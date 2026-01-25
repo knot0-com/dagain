@@ -69,13 +69,16 @@ async function gitTopLevel(cwd) {
 }
 
 async function loadConfig(rootDir) {
-  const configPath = path.join(rootDir, ".choreo", "config.json");
-  try {
-    const text = await fs.readFile(configPath, "utf8");
-    return JSON.parse(text);
-  } catch {
-    return null;
+  for (const dirName of [".taskgraph", ".choreo"]) {
+    const configPath = path.join(rootDir, dirName, "config.json");
+    try {
+      const text = await fs.readFile(configPath, "utf8");
+      return JSON.parse(text);
+    } catch {
+      // try next
+    }
   }
+  return null;
 }
 
 async function ensureDir(dirPath) {
@@ -136,7 +139,8 @@ async function main() {
   }
 
   const config = await loadConfig(rootDir);
-  const worktreesDirRaw = String(config?.supervisor?.worktrees?.dir || ".choreo/worktrees").trim() || ".choreo/worktrees";
+  const worktreesDirRaw =
+    String(config?.supervisor?.worktrees?.dir || ".taskgraph/worktrees").trim() || ".taskgraph/worktrees";
   const worktreesDir = path.isAbsolute(worktreesDirRaw) ? worktreesDirRaw : path.join(rootDir, worktreesDirRaw);
   const worktreePath = path.join(worktreesDir, sanitizeWorktreeName(taskId));
 
@@ -197,9 +201,11 @@ async function main() {
     return;
   }
 
-  const addArgs = ["add", "-A", "--", ".", ":(exclude)GOAL.md", ":(exclude).choreo"];
+  const addArgs = ["add", "-A", "--", ".", ":(exclude)GOAL.md", ":(exclude).taskgraph", ":(exclude).choreo"];
   const addRes = await runGit(worktreePath, addArgs);
-  commands.push(`git -C ${worktreePath} add -A -- . ':(exclude)GOAL.md' ':(exclude).choreo'`);
+  commands.push(
+    `git -C ${worktreePath} add -A -- . ':(exclude)GOAL.md' ':(exclude).taskgraph' ':(exclude).choreo'`,
+  );
   if (addRes.code !== 0) {
     const msg = `Failed to stage worktree changes (exit ${addRes.code})`;
     result({

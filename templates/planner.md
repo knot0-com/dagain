@@ -56,7 +56,7 @@ KV cheat sheet:
 - Type: {{NODE_TYPE}}
 
 ## Output Requirements (Non‑negotiable)
-- Do **not** edit `.choreo/workgraph.json` directly.
+- Do **not** edit `.taskgraph/workgraph.json` directly.
 - Output exactly one machine-parseable JSON object inside **`<result>...</result>`**.
 - No prose outside the `<result>` block.
 - If the work requires a human decision, use `status: "checkpoint"` and include a `checkpoint` object (exactly one question).

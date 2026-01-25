@@ -60,7 +60,7 @@ test("run: auto-writes KV envelope keys for each node run", async () => {
     "utf8",
   );
 
-  const configPath = path.join(tmpDir, ".choreo", "config.json");
+  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(
@@ -95,7 +95,7 @@ test("run: auto-writes KV envelope keys for each node run", async () => {
   });
   assert.equal(runRes.code, 0, runRes.stderr || runRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".choreo", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
   const rows = await sqliteJson(
     dbPath,
     "SELECT key, value_text, run_id FROM kv_latest\n" +
@@ -110,7 +110,7 @@ test("run: auto-writes KV envelope keys for each node run", async () => {
 
   const stdoutRunId = String(byKey.get("out.last_stdout_path")?.run_id || "").trim();
   assert.ok(stdoutRunId, "expected out.last_stdout_path.run_id to be set");
-  assert.equal(byKey.get("out.last_stdout_path")?.value_text, path.join(".choreo", "runs", stdoutRunId, "stdout.log"));
-  assert.equal(byKey.get("out.last_result_path")?.value_text, path.join(".choreo", "runs", stdoutRunId, "result.json"));
+  assert.equal(byKey.get("out.last_stdout_path")?.value_text, path.join(".taskgraph", "runs", stdoutRunId, "stdout.log"));
+  assert.equal(byKey.get("out.last_result_path")?.value_text, path.join(".taskgraph", "runs", stdoutRunId, "result.json"));
 });
 

@@ -38,7 +38,7 @@ test("migrate: ensureMailboxTable creates mailbox table", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".choreo", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
   await sqliteExec(dbPath, "DROP TABLE IF EXISTS mailbox;\n");
 
   const runRes = await runCli({

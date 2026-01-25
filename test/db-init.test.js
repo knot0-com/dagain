@@ -42,7 +42,7 @@ test("init: creates sqlite state db with plan-000 node", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".choreo", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
   await stat(dbPath);
 
   const nodes = await sqliteJson(dbPath, "SELECT id FROM nodes ORDER BY id;");

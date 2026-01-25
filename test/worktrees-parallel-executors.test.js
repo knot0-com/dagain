@@ -74,7 +74,7 @@ test("worktrees: mode=always runs conflicting executors in parallel and merges s
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const configPath = path.join(tmpDir, ".choreo", "config.json");
+  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(
@@ -101,7 +101,7 @@ test("worktrees: mode=always runs conflicting executors in parallel and merges s
         supervisor: {
           idleSleepMs: 0,
           staleLockSeconds: 3600,
-          worktrees: { mode: "always", dir: ".choreo/worktrees" },
+          worktrees: { mode: "always", dir: ".taskgraph/worktrees" },
         },
       },
       null,
@@ -122,7 +122,7 @@ test("worktrees: mode=always runs conflicting executors in parallel and merges s
   assert.equal(runRes.code, 0, runRes.stderr || runRes.stdout);
   assert.match(runRes.stdout + runRes.stderr, /All nodes done\./);
 
-  const activityPath = path.join(tmpDir, ".choreo", "memory", "activity.log");
+  const activityPath = path.join(tmpDir, ".taskgraph", "memory", "activity.log");
   const activity = await readFile(activityPath, "utf8");
 
   const spawnA = activity.search(/spawn role=executor .*node=task-a/);
@@ -141,7 +141,7 @@ test("worktrees: mode=always runs conflicting executors in parallel and merges s
   assert.ok(spawnMergeB !== -1, "expected merge-task-b node");
   assert.ok(spawnMergeB > exitMergeA, "expected merge-task-b spawn after merge-task-a exit (serialized merges)");
 
-  const worktreesDir = path.join(tmpDir, ".choreo", "worktrees");
+  const worktreesDir = path.join(tmpDir, ".taskgraph", "worktrees");
   const worktreeA = path.join(worktreesDir, "task-a");
   const worktreeB = path.join(worktreesDir, "task-b");
   const sharedA = await readFile(path.join(worktreeA, "shared.txt"), "utf8");

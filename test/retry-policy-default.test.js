@@ -50,7 +50,7 @@ test("applyResult: defaultRetryPolicy applies to added nodes", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".choreo", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
   const now = new Date().toISOString().replace(/'/g, "''");
   await sqliteExec(
     dbPath,
@@ -92,7 +92,7 @@ test("applyResult: defaultRetryPolicy applies to escalation nodes", async () => 
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".choreo", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
   const now = new Date().toISOString().replace(/'/g, "''");
   await sqliteExec(
     dbPath,

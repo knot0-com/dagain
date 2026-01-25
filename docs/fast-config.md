@@ -1,4 +1,4 @@
-# Choreo Fast Config
+# Taskgraph Fast Config
 
 This profile minimizes full LLM invocations (especially verification) and reduces prompt size per node.
 
@@ -9,7 +9,7 @@ This profile minimizes full LLM invocations (especially verification) and reduce
 - `supervisor.packetMode = "thin"` (omit large planning drafts for executor/verifier/integrator)
 - `supervisor.idleSleepMs = 0` (faster loop; higher CPU)
 
-## Example `.choreo/config.json`
+## Example `.taskgraph/config.json`
 
 ```json
 {
@@ -41,6 +41,5 @@ This profile minimizes full LLM invocations (especially verification) and reduce
 
 ## Quick benchmark
 
-- Count runner spawns: `rg "spawn role=" .choreo/memory/activity.log`
-- Inspect verify runner selection: `sqlite3 -json .choreo/state.sqlite "SELECT id,type,runner FROM nodes WHERE type='verify' ORDER BY id;"`
-
+- Count runner spawns: `rg "spawn role=" .taskgraph/memory/activity.log`
+- Inspect verify runner selection: `sqlite3 -json .taskgraph/state.sqlite "SELECT id,type,runner FROM nodes WHERE type='verify' ORDER BY id;"`

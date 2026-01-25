@@ -2,7 +2,7 @@ import path from "node:path";
 import { pathExists, readJson, writeJsonAtomic } from "./fs.js";
 
 export function choreoPaths(rootDir) {
-  const choreoDir = path.join(rootDir, ".choreo");
+  const choreoDir = path.join(rootDir, ".taskgraph");
   return {
     rootDir,
     choreoDir,
@@ -37,7 +37,7 @@ export function defaultConfig() {
       // choreo strips that flag automatically in those contexts.
       claude: {
         cmd: "claude --dangerously-skip-permissions -p \"$(cat {packet})\"",
-        env: { TMPDIR: ".choreo/tmp" },
+        env: { TMPDIR: ".taskgraph/tmp" },
       },
       gemini: { cmd: "gemini -y -p \"$(cat {packet})\"" },
     },
@@ -57,7 +57,7 @@ export function defaultConfig() {
 	      autoResetFailedMax: 1,
 	      claudeSensitiveFallbackRunner: "codex",
 	      multiVerifier: "one",
-	      worktrees: { mode: "off", dir: ".choreo/worktrees" },
+	      worktrees: { mode: "off", dir: ".taskgraph/worktrees" },
 	    }
   };
 }
