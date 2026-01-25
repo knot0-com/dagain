@@ -2,6 +2,7 @@
 .worktrees/
 
 *.tgz
+GOAL.md
 
 # Tests + internal planning docs
 test/
@@ -10,4 +11,3 @@ docs/plans/
 # Test-only / development helpers
 scripts/mock-*
 scripts/sleep-agent.js
-
