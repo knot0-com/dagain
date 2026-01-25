@@ -6,6 +6,10 @@ Taskgraph runs a **work graph** (nodes + deps) stored in **SQLite**, and execute
 
 > Back-compat: if a legacy `.choreo/` state dir exists, Taskgraph migrates it to `.taskgraph/` and leaves a `.choreo` symlink. (CLI alias: `choreo`.)
 
+## Docs
+
+- https://knot0.com/writing/taskgraph
+
 ## Install
 
 Once published to npm:
