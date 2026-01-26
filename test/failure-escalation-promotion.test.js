@@ -42,7 +42,7 @@ test("applyResult: failing escalation node promotes to parent plan", async () =>
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
   const now = new Date().toISOString().replace(/'/g, "''");
   await sqliteExec(
     dbPath,
@@ -92,7 +92,7 @@ test("applyResult: failing root escalation does not nest escalation nodes", asyn
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
   const now = new Date().toISOString().replace(/'/g, "''");
   await sqliteExec(
     dbPath,

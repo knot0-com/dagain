@@ -74,7 +74,7 @@ test("cancel: SIGTERM unlocks node and clears supervisor lock", { timeout: 10_00
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
+  const configPath = path.join(tmpDir, ".dagain", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(
@@ -103,8 +103,8 @@ test("cancel: SIGTERM unlocks node and clears supervisor lock", { timeout: 10_00
     "utf8",
   );
 
-  const lockPath = path.join(tmpDir, ".taskgraph", "lock");
-  const graphPath = path.join(tmpDir, ".taskgraph", "workgraph.json");
+  const lockPath = path.join(tmpDir, ".dagain", "lock");
+  const graphPath = path.join(tmpDir, ".dagain", "workgraph.json");
 
   const { child, done } = spawnCli({
     binPath,
@@ -155,7 +155,7 @@ test("stop: choreo stop signals a running supervisor", { timeout: 10_000 }, asyn
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
+  const configPath = path.join(tmpDir, ".dagain", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(
@@ -184,8 +184,8 @@ test("stop: choreo stop signals a running supervisor", { timeout: 10_000 }, asyn
     "utf8",
   );
 
-  const lockPath = path.join(tmpDir, ".taskgraph", "lock");
-  const graphPath = path.join(tmpDir, ".taskgraph", "workgraph.json");
+  const lockPath = path.join(tmpDir, ".dagain", "lock");
+  const graphPath = path.join(tmpDir, ".dagain", "workgraph.json");
 
   const { child, done } = spawnCli({
     binPath,

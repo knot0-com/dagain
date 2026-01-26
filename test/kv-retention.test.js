@@ -42,7 +42,7 @@ test("kv: keeps last 5 history rows per key", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
 
   for (let i = 1; i <= 6; i += 1) {
     await kvPut({

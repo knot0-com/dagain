@@ -1,9 +1,10 @@
 {
-  "name": "taskgraph",
+  "name": "dagain",
   "version": "0.1.0",
   "description": "DAG-based orchestration CLI for coding agents (Codex, Claude Code, Gemini).",
   "type": "module",
   "bin": {
+    "dagain": "bin/dagain.js",
     "taskgraph": "bin/taskgraph.js",
     "choreo": "bin/choreo.js"
   },
@@ -21,14 +22,15 @@
     "gemini",
     "llm",
     "orchestration",
-    "taskgraph"
+    "taskgraph",
+    "dagain"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/knot0-com/taskgraph.git"
+    "url": "https://github.com/knot0-com/dagain.git"
   },
   "bugs": {
-    "url": "https://github.com/knot0-com/taskgraph/issues"
+    "url": "https://github.com/knot0-com/dagain/issues"
   },
-  "homepage": "https://github.com/knot0-com/taskgraph"
+  "homepage": "https://github.com/knot0-com/dagain"
 }

@@ -36,58 +36,87 @@ import {
 	} from "./lib/db/nodes.js";
 
 function usage() {
-  return `taskgraph
+  return `dagain (aliases: taskgraph, choreo)
 
 Usage:
-  taskgraph [<goal...>] [--color] [--no-color]
-  taskgraph chat [--no-color]
-  taskgraph control pause|resume
-  taskgraph control set-workers --workers=<n>
-  taskgraph control replan
-  taskgraph control cancel --node=<id>
-  taskgraph node add --id=<id> --title="..." [--type=<t>] [--status=<s>] [--parent=<id>] [--runner=<name>] [--inputs=<json>] [--ownership=<json>] [--acceptance=<json>] [--verify=<json>] [--retry-policy=<json>] [--depends-on=<json|a,b>]
-  taskgraph node update --id=<id> [--title="..."] [--type=<t>] [--parent=<id>] [--runner=<name>] [--inputs=<json>] [--ownership=<json>] [--acceptance=<json>] [--verify=<json>] [--retry-policy=<json>] [--force]
-  taskgraph node set-status --id=<id> --status=<open|done|failed|needs_human> [--force]
-  taskgraph dep add --node=<id> --depends-on=<id> [--required-status=<done|terminal>]
-  taskgraph dep remove --node=<id> --depends-on=<id>
-  taskgraph start [<goal...>] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
-  taskgraph init [--force] [--no-templates] [--goal="..."] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
-		  taskgraph goal [--goal="..."] [--max-turns=<n>] [--runner=<name>] [--live] [--no-live] [--color] [--no-color]
-		  taskgraph status
-	  taskgraph run [--once] [--workers=<n>] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
-	  taskgraph resume [--once] [--workers=<n>] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
-	  taskgraph answer [--node=<id>] [--checkpoint=<file>] [--answer="..."] [--no-prompt]
-	  taskgraph kv get [--run] [--node=<id>] --key=<k> [--json]
-	  taskgraph kv put [--run] [--node=<id>] --key=<k> --value="..." [--allow-cross-node-write]
-	  taskgraph kv ls [--run] [--node=<id>] [--prefix=<p>] [--json]
-  taskgraph microcall --prompt="..." [--runner=<name>] [--role=<role>] [--store-key=<k>] [--run] [--json]
-  taskgraph templates sync [--force]
-		  taskgraph stop [--signal=<sig>]
-		  taskgraph graph validate
+  dagain [<goal...>] [--color] [--no-color]
+  dagain chat [--no-color]
+  dagain control pause|resume
+  dagain control set-workers --workers=<n>
+  dagain control replan
+  dagain control cancel --node=<id>
+  dagain node add --id=<id> --title="..." [--type=<t>] [--status=<s>] [--parent=<id>] [--runner=<name>] [--inputs=<json>] [--ownership=<json>] [--acceptance=<json>] [--verify=<json>] [--retry-policy=<json>] [--depends-on=<json|a,b>]
+  dagain node update --id=<id> [--title="..."] [--type=<t>] [--parent=<id>] [--runner=<name>] [--inputs=<json>] [--ownership=<json>] [--acceptance=<json>] [--verify=<json>] [--retry-policy=<json>] [--force]
+  dagain node set-status --id=<id> --status=<open|done|failed|needs_human> [--force]
+  dagain dep add --node=<id> --depends-on=<id> [--required-status=<done|terminal>]
+  dagain dep remove --node=<id> --depends-on=<id>
+  dagain start [<goal...>] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
+  dagain init [--force] [--no-templates] [--goal="..."] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
+		  dagain goal [--goal="..."] [--max-turns=<n>] [--runner=<name>] [--live] [--no-live] [--color] [--no-color]
+		  dagain status
+	  dagain run [--once] [--workers=<n>] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
+	  dagain resume [--once] [--workers=<n>] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
+	  dagain answer [--node=<id>] [--checkpoint=<file>] [--answer="..."] [--no-prompt]
+	  dagain kv get [--run] [--node=<id>] --key=<k> [--json]
+	  dagain kv put [--run] [--node=<id>] --key=<k> --value="..." [--allow-cross-node-write]
+	  dagain kv ls [--run] [--node=<id>] [--prefix=<p>] [--json]
+  dagain microcall --prompt="..." [--runner=<name>] [--role=<role>] [--store-key=<k>] [--run] [--json]
+  dagain templates sync [--force]
+		  dagain stop [--signal=<sig>]
+		  dagain graph validate
 
 State:
-  .taskgraph/config.json
-  .taskgraph/workgraph.json
+  .dagain/config.json
+  .dagain/workgraph.json
 `;
 }
 
 async function maybeMigrateLegacyStateDir(rootDir) {
-  const legacyDir = path.join(rootDir, ".choreo");
-  const nextDir = path.join(rootDir, ".taskgraph");
+  const canonicalDir = path.join(rootDir, ".dagain");
+  const legacyTaskgraphDir = path.join(rootDir, ".taskgraph");
+  const legacyChoreoDir = path.join(rootDir, ".choreo");
 
-  if (await pathExists(nextDir)) return;
-  if (!(await pathExists(legacyDir))) return;
+  if (await pathExists(canonicalDir)) return;
 
-  try {
-    await rename(legacyDir, nextDir);
-  } catch {
+  const ensureAliasSymlink = async (aliasPath) => {
+    try {
+      const st = await lstat(aliasPath);
+      if (!st.isSymbolicLink?.()) return;
+      try {
+        await rm(aliasPath, { force: true });
+      } catch {
+        // ignore
+      }
+    } catch {
+      // missing; fall through
+    }
+    try {
+      await symlink(".dagain", aliasPath);
+    } catch {
+      // ignore
+    }
+  };
+
+  const migrateFrom = async (fromDir) => {
+    try {
+      await rename(fromDir, canonicalDir);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (await pathExists(legacyTaskgraphDir)) {
+    if (!(await migrateFrom(legacyTaskgraphDir))) return;
+    await ensureAliasSymlink(legacyTaskgraphDir);
+    await ensureAliasSymlink(legacyChoreoDir);
     return;
   }
 
-  try {
-    await symlink(".taskgraph", legacyDir);
-  } catch {
-    // ignore
+  if (await pathExists(legacyChoreoDir)) {
+    if (!(await migrateFrom(legacyChoreoDir))) return;
+    await ensureAliasSymlink(legacyTaskgraphDir);
+    await ensureAliasSymlink(legacyChoreoDir);
   }
 }
 
@@ -340,7 +369,7 @@ async function repairChoreoStateOwnership({ paths, ui }) {
       // ignore
     }
   } catch (error) {
-    ui?.event?.("warn", `Failed to repair .taskgraph ownership: ${error?.message || String(error)}`);
+    ui?.event?.("warn", `Failed to repair .dagain ownership: ${error?.message || String(error)}`);
   }
 }
 
@@ -349,7 +378,7 @@ function resolveRunnerEnv({ runnerName, runner, cwd, paths }) {
   const out = raw ? { ...raw } : {};
 
   // Claude Code uses os.tmpdir() for its scratchpad. If prior runs created a root-owned
-  // /tmp/claude directory, non-root runs can hit EACCES. Default TMPDIR into .taskgraph/tmp.
+  // /tmp/claude directory, non-root runs can hit EACCES. Default TMPDIR into .dagain/tmp.
   if (runnerName === "claude") {
     // Claude also treats sudo-context env vars as a privileged context. Clear them so
     // `--dangerously-skip-permissions` can work when the actual uid is not root.
@@ -594,7 +623,7 @@ function normalizeWorktreeMode(value) {
 }
 
 function resolveWorktreesDir({ paths, config }) {
-  const raw = String(config?.supervisor?.worktrees?.dir || ".taskgraph/worktrees").trim() || ".taskgraph/worktrees";
+  const raw = String(config?.supervisor?.worktrees?.dir || ".dagain/worktrees").trim() || ".dagain/worktrees";
   return path.isAbsolute(raw) ? raw : path.join(paths.rootDir, raw);
 }
 
@@ -836,10 +865,10 @@ async function initCommand(rootDir, flags) {
   }
 
   await repairChoreoStateOwnership({ paths });
-  process.stdout.write(`Initialized taskgraph state in ${paths.choreoDir}\n`);
+  process.stdout.write(`Initialized dagain state in ${paths.choreoDir}\n`);
 
   if (goalFlag && !noRefine) {
-    if (!config) throw new Error("Missing .taskgraph/config.json after init");
+    if (!config) throw new Error("Missing .dagain/config.json after init");
     await refineGoalInteractive({
       rootDir,
       paths,
@@ -856,7 +885,7 @@ async function initCommand(rootDir, flags) {
 async function goalCommand(rootDir, flags) {
   const paths = choreoPaths(rootDir);
   const config = await loadConfig(paths.configPath);
-  if (!config) throw new Error("Missing .taskgraph/config.json. Run `taskgraph init` first.");
+  if (!config) throw new Error("Missing .dagain/config.json. Run `dagain init` first.");
 
   const goalFlag = typeof flags.goal === "string" ? flags.goal : "";
   const maxTurnsRaw = flags["max-turns"] ?? 12;
@@ -874,7 +903,7 @@ async function goalCommand(rootDir, flags) {
       "utf8",
     );
   } else if (!(await pathExists(paths.goalPath))) {
-    throw new Error("Missing GOAL.md. Provide `--goal \"...\"` or run `taskgraph init`.");
+    throw new Error("Missing GOAL.md. Provide `--goal \"...\"` or run `dagain init`.");
   }
 
   await refineGoalInteractive({
@@ -935,7 +964,7 @@ async function startCommand(rootDir, flags, positionalGoalTokens) {
 
   // Optional first-run config prompt.
   let config = await loadConfig(paths.configPath);
-  if (!config) throw new Error("Missing .taskgraph/config.json after init");
+  if (!config) throw new Error("Missing .dagain/config.json after init");
   if (!hadConfig && canPrompt) {
     const runnerNames = Object.keys(config.runners || {}).sort();
     const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -968,7 +997,7 @@ async function startCommand(rootDir, flags, positionalGoalTokens) {
       rl.close();
     }
     config = await loadConfig(paths.configPath);
-    if (!config) throw new Error("Missing .taskgraph/config.json after saving");
+    if (!config) throw new Error("Missing .dagain/config.json after saving");
   }
 
   // Refine goal only when a new seed goal was provided for this invocation.
@@ -978,7 +1007,7 @@ async function startCommand(rootDir, flags, positionalGoalTokens) {
 
   // Ensure graph has at least one planning node (older graphs may be empty).
   const graph = await loadWorkgraph(paths.graphPath);
-  if (!graph) throw new Error("Missing .taskgraph/workgraph.json after init");
+  if (!graph) throw new Error("Missing .dagain/workgraph.json after init");
   if (!Array.isArray(graph.nodes)) graph.nodes = [];
   if (graph.nodes.length === 0) {
     graph.nodes.push({
@@ -1068,7 +1097,7 @@ async function refineGoalInteractive({
         resolveRoleRunnerPick("main", config, { seed: run, attempt: Math.max(0, turn - 1) });
       const runner = config.runners?.[runnerName];
       if (!runner?.cmd) {
-        throw new Error(`Runner not configured: ${runnerName}. Check .taskgraph/config.json`);
+        throw new Error(`Runner not configured: ${runnerName}. Check .dagain/config.json`);
       }
 
       await appendLine(activityPath, `[${nowIso()}] goal-refine turn=${turn} runner=${runnerName} run=${run}`);
@@ -1306,7 +1335,7 @@ async function statusCommand(rootDir) {
   const paths = choreoPaths(rootDir);
   const hasDb = Boolean(paths.dbPath && (await pathExists(paths.dbPath)));
   const graph = hasDb ? await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath }) : await loadWorkgraph(paths.graphPath);
-  if (!graph) throw new Error("Missing .taskgraph state. Run `taskgraph init`.");
+  if (!graph) throw new Error("Missing .dagain state. Run `dagain init`.");
 
   const counts = countByStatus(graph.nodes);
   process.stdout.write("Workgraph status\n");
@@ -1357,7 +1386,7 @@ async function statusCommand(rootDir) {
       process.stdout.write(`- ${node.id}${cpQuestion ? ` — ${cpQuestion}` : ""}\n`);
       if (cpPath) process.stdout.write(`  checkpoint: ${cpPath}\n`);
     }
-    process.stdout.write("\nTip: `taskgraph answer` to respond and resume.\n");
+    process.stdout.write("\nTip: `dagain answer` to respond and resume.\n");
   }
 
   const checkpointFiles = await listCheckpoints(paths.checkpointsDir);
@@ -1413,7 +1442,7 @@ function validateGraph(graph) {
 async function graphValidateCommand(rootDir) {
   const paths = choreoPaths(rootDir);
   const graph = await loadWorkgraph(paths.graphPath);
-  if (!graph) throw new Error("Missing .taskgraph/workgraph.json. Run `taskgraph init`.");
+  if (!graph) throw new Error("Missing .dagain/workgraph.json. Run `dagain init`.");
   validateGraph(graph);
   process.stdout.write("workgraph.json OK\n");
 }
@@ -1480,14 +1509,14 @@ function diagnoseNoRunnableNodes(graph) {
 async function runCommand(rootDir, flags) {
   const paths = choreoPaths(rootDir);
   const config = await loadConfig(paths.configPath);
-  if (!config) throw new Error("Missing .taskgraph/config.json. Run `taskgraph init`.");
-  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .taskgraph/state.sqlite. Run `taskgraph init`.");
+  if (!config) throw new Error("Missing .dagain/config.json. Run `dagain init`.");
+  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
   await ensureDepsRequiredStatusColumn({ dbPath: paths.dbPath });
   await ensureMailboxTable({ dbPath: paths.dbPath });
   const initGraph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
   if (!Array.isArray(initGraph.nodes) || initGraph.nodes.length === 0) {
     process.stderr.write(
-      "No nodes in .taskgraph/state.sqlite. Run `taskgraph start` (or `taskgraph init --force`) to seed a plan node.\n",
+      "No nodes in .dagain/state.sqlite. Run `dagain start` (or `dagain init --force`) to seed a plan node.\n",
     );
     return;
   }
@@ -1523,10 +1552,10 @@ async function runCommand(rootDir, flags) {
   const activityPath = path.join(paths.memoryDir, "activity.log");
   const errorsPath = path.join(paths.memoryDir, "errors.log");
 
-  ui.writeLine(ui.hr("taskgraph run"));
+  ui.writeLine(ui.hr("dagain run"));
   ui.detail(`root: ${paths.rootDir}`);
   ui.detail(`goal: ${path.relative(paths.rootDir, paths.goalPath) || "GOAL.md"}`);
-  ui.detail(`state: ${path.relative(paths.rootDir, paths.choreoDir) || ".taskgraph"}`);
+  ui.detail(`state: ${path.relative(paths.rootDir, paths.choreoDir) || ".dagain"}`);
   if (workers > 1) ui.detail(`workers: ${workers}`);
   if (worktreeMode !== "off" && worktreesDir) ui.detail(`worktrees: ${worktreeMode} (${path.relative(paths.rootDir, worktreesDir) || worktreesDir})`);
   ui.writeLine(ui.hr());
@@ -1545,7 +1574,7 @@ async function runCommand(rootDir, flags) {
     ui.event(
       "warn",
       `Supervisor already running pid=${lock.pid || "?"} host=${lock.host || "?"}.` +
-        (canPrompt && !noPrompt ? " Stop it and take over?" : " Use `taskgraph stop` or wait."),
+        (canPrompt && !noPrompt ? " Stop it and take over?" : " Use `dagain stop` or wait."),
     );
 
     if (!canPrompt || noPrompt) {
@@ -1973,7 +2002,7 @@ async function runCommand(rootDir, flags) {
               "checkpoint",
               canPrompt && !noPrompt
                 ? `Waiting for human input (${needsHuman} node${needsHuman === 1 ? "" : "s"}). Answer below to continue.`
-                : `Waiting for human input (${needsHuman} node${needsHuman === 1 ? "" : "s"}). Run \`taskgraph answer\` or \`taskgraph status\`.`,
+                : `Waiting for human input (${needsHuman} node${needsHuman === 1 ? "" : "s"}). Run \`dagain answer\` or \`dagain status\`.`,
             );
           } else if (idleReason === "blocked_failed") {
             ui.event(
@@ -2195,7 +2224,7 @@ async function runCommand(rootDir, flags) {
               "checkpoint",
               canPrompt && !noPrompt
                 ? `Waiting for human input (${needsHuman} node${needsHuman === 1 ? "" : "s"}). Answer below to continue.`
-                : `Waiting for human input (${needsHuman} node${needsHuman === 1 ? "" : "s"}). Run \`taskgraph answer\` or \`taskgraph status\`.`,
+                : `Waiting for human input (${needsHuman} node${needsHuman === 1 ? "" : "s"}). Run \`dagain answer\` or \`dagain status\`.`,
             );
           } else if (idleReason === "blocked_failed") {
             ui.event(
@@ -3585,10 +3614,10 @@ async function startSupervisorDetached({ rootDir, flags }) {
 
 async function chatCommand(rootDir, flags) {
   const paths = choreoPaths(rootDir);
-  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .taskgraph/state.sqlite. Run `taskgraph init`.");
+  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
   const config = await loadConfig(paths.configPath);
-  if (!config) throw new Error("Missing .taskgraph/config.json. Run `taskgraph init`.");
-  process.stdout.write("taskgraph chat (type /help)\n");
+  if (!config) throw new Error("Missing .dagain/config.json. Run `dagain init`.");
+  process.stdout.write("dagain chat (type /help)\n");
   const noLlm = Boolean(flags["no-llm"]) || Boolean(flags.noLlm);
   const runnerOverride = typeof flags.runner === "string" ? flags.runner.trim() : "";
   const roleOverride = typeof flags.role === "string" ? flags.role.trim() : "planner";
@@ -3613,7 +3642,7 @@ async function chatCommand(rootDir, flags) {
   }
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  rl.setPrompt("taskgraph> ");
+  rl.setPrompt("dagain> ");
   rl.prompt();
   try {
     for await (const lineRaw of rl) {
@@ -3990,12 +4019,12 @@ async function chatCommand(rootDir, flags) {
         continue;
       }
       if (line === "/node.add") {
-        process.stdout.write('Tip: use natural language, or run `taskgraph node add --id=... --title="..." --parent=plan-000`.\n');
+        process.stdout.write('Tip: use natural language, or run `dagain node add --id=... --title="..." --parent=plan-000`.\n');
         rl.prompt();
         continue;
       }
       if (line === "/node.set-status") {
-        process.stdout.write("Tip: run `taskgraph node set-status --id=<id> --status=<open|done|failed|needs_human>`.\n");
+        process.stdout.write("Tip: run `dagain node set-status --id=<id> --status=<open|done|failed|needs_human>`.\n");
         rl.prompt();
         continue;
       }
@@ -4010,12 +4039,12 @@ async function chatCommand(rootDir, flags) {
 async function nodeCommand(rootDir, positional, flags) {
   const paths = choreoPaths(rootDir);
   const config = await loadConfig(paths.configPath);
-  if (!config) throw new Error("Missing .taskgraph/config.json. Run `taskgraph init`.");
-  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .taskgraph/state.sqlite. Run `taskgraph init`.");
+  if (!config) throw new Error("Missing .dagain/config.json. Run `dagain init`.");
+  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
   await ensureDepsRequiredStatusColumn({ dbPath: paths.dbPath });
 
   const sub = String(positional?.[0] || "").trim();
-  if (!sub) throw new Error("Missing node subcommand. Use `taskgraph node add` or `taskgraph node set-status`.");
+  if (!sub) throw new Error("Missing node subcommand. Use `dagain node add` or `dagain node set-status`.");
 
   if (sub === "add") {
     const id = typeof flags.id === "string" ? flags.id.trim() : "";
@@ -4175,11 +4204,11 @@ async function nodeCommand(rootDir, positional, flags) {
 
 async function depCommand(rootDir, positional, flags) {
   const paths = choreoPaths(rootDir);
-  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .taskgraph/state.sqlite. Run `taskgraph init`.");
+  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
   await ensureDepsRequiredStatusColumn({ dbPath: paths.dbPath });
 
   const sub = String(positional?.[0] || "").trim();
-  if (!sub) throw new Error("Missing dep subcommand. Use `taskgraph dep add` or `taskgraph dep remove`.");
+  if (!sub) throw new Error("Missing dep subcommand. Use `dagain dep add` or `dagain dep remove`.");
 
   const nodeIdRaw =
     typeof flags.node === "string"
@@ -4249,7 +4278,7 @@ async function depCommand(rootDir, positional, flags) {
 
 async function controlCommand(rootDir, positional, flags) {
   const paths = choreoPaths(rootDir);
-  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .taskgraph/state.sqlite. Run `taskgraph init`.");
+  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
   await ensureMailboxTable({ dbPath: paths.dbPath });
 
   const sub = String(positional[0] || "").trim();
@@ -4447,7 +4476,7 @@ async function stopCommand(rootDir, flags) {
 
 async function templatesSyncCommand(rootDir, flags) {
   const paths = choreoPaths(rootDir);
-  if (!(await pathExists(paths.choreoDir))) throw new Error("Missing .taskgraph directory. Run `taskgraph init` first.");
+  if (!(await pathExists(paths.choreoDir))) throw new Error("Missing .dagain directory. Run `dagain init` first.");
   const force = Boolean(flags.force);
   await copyTemplates(rootDir, { force });
   process.stdout.write(`Templates synced${force ? " (force)" : ""}.\n`);
@@ -4460,7 +4489,7 @@ async function answerCommand(rootDir, flags) {
   const abortSignal = cancel.signal;
 
   try {
-    if (!(await pathExists(paths.dbPath))) throw new Error("Missing .taskgraph/state.sqlite. Run `taskgraph init`.");
+    if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
     const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
 
     const targetNodeId = typeof flags.node === "string" ? flags.node.trim() : "";
@@ -4599,7 +4628,7 @@ async function answerCommand(rootDir, flags) {
     await writeFile(progressPath, lines.join("\n") + "\n", { encoding: "utf8", flag: "a" });
 
     ui.event("done", `Recorded answer and reopened ${node.id}.`);
-    ui.detail("Run `taskgraph run` (or keep the supervisor running) to continue.");
+    ui.detail("Run `dagain run` (or keep the supervisor running) to continue.");
   } finally {
     cancel.cleanup();
   }
@@ -4616,7 +4645,7 @@ async function kvCommand(rootDir, positional, flags) {
   }
 
   const dbPath = String(process.env.CHOREO_DB || paths.dbPath || "").trim();
-  if (!dbPath || !(await pathExists(dbPath))) throw new Error("Missing state DB. Run `taskgraph init`.");
+  if (!dbPath || !(await pathExists(dbPath))) throw new Error("Missing state DB. Run `dagain init`.");
 
   const runScoped = Boolean(flags.run);
   const nodeFlag = typeof flags.node === "string" ? flags.node.trim() : "";
@@ -4693,7 +4722,7 @@ async function microcallCommand(rootDir, flags) {
   if (!prompt) throw new Error('Missing prompt. Provide `--prompt "..."`.');
 
   const config = await loadConfig(paths.configPath);
-  if (!config) throw new Error("Missing .taskgraph/config.json. Run `taskgraph init` first.");
+  if (!config) throw new Error("Missing .dagain/config.json. Run `dagain init` first.");
 
   const runnerNameFlag = typeof flags.runner === "string" ? flags.runner.trim() : "";
   const role = typeof flags.role === "string" ? flags.role.trim() : "researcher";
@@ -4753,7 +4782,7 @@ async function microcallCommand(rootDir, flags) {
   const storeKey = typeof flags["store-key"] === "string" ? flags["store-key"].trim() : "";
   if (storeKey) {
     const dbPath = String(process.env.CHOREO_DB || paths.dbPath || "").trim();
-    if (!dbPath || !(await pathExists(dbPath))) throw new Error("Missing $CHOREO_DB for --store-key (or run `taskgraph init`).");
+    if (!dbPath || !(await pathExists(dbPath))) throw new Error("Missing $CHOREO_DB for --store-key (or run `dagain init`).");
 
     const storeRunScoped = Boolean(flags.run);
     const envNodeId = String(process.env.CHOREO_NODE_ID || "").trim();

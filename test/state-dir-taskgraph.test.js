@@ -24,10 +24,10 @@ function runCli({ binPath, cwd, args }) {
   });
 }
 
-test("init: uses .taskgraph/ as the state dir", async () => {
+test("init: uses .dagain/ as the state dir", async () => {
   const repoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(repoRoot, "bin", "taskgraph.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "taskgraph-state-dir-"));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-state-dir-"));
 
   const initRes = await runCli({
     binPath,
@@ -36,7 +36,6 @@ test("init: uses .taskgraph/ as the state dir", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  await stat(path.join(tmpDir, ".taskgraph", "config.json"));
-  await stat(path.join(tmpDir, ".taskgraph", "state.sqlite"));
+  await stat(path.join(tmpDir, ".dagain", "config.json"));
+  await stat(path.join(tmpDir, ".dagain", "state.sqlite"));
 });
-

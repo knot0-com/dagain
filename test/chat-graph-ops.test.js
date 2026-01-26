@@ -58,7 +58,7 @@ test("chat: executes rich graph ops (node.add/update + dep.add)", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
+  const configPath = path.join(tmpDir, ".dagain", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(
@@ -92,7 +92,7 @@ test("chat: executes rich graph ops (node.add/update + dep.add)", async () => {
   });
   assert.equal(res.code, 0, res.stderr || res.stdout);
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
   const depRows = await sqliteJson(
     dbPath,
     "SELECT node_id, depends_on_id, required_status FROM deps WHERE node_id='task-002' AND depends_on_id='task-001' LIMIT 1;",

@@ -41,7 +41,7 @@ test("run: injects DB pointer env vars into runner", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
+  const configPath = path.join(tmpDir, ".dagain", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(
@@ -79,11 +79,11 @@ test("run: injects DB pointer env vars into runner", async () => {
 
   const envRecordPath = path.join(tmpDir, "runner_env.json");
   const envRecord = JSON.parse(await readFile(envRecordPath, "utf8"));
-  assert.equal(envRecord.CHOREO_DB, path.join(tmpDir, ".taskgraph", "state.sqlite"));
+  assert.equal(envRecord.CHOREO_DB, path.join(tmpDir, ".dagain", "state.sqlite"));
   assert.equal(envRecord.CHOREO_NODE_ID, "plan-000");
-  assert.equal(envRecord.CHOREO_ARTIFACTS_DIR, path.join(tmpDir, ".taskgraph", "artifacts"));
-  assert.equal(envRecord.CHOREO_CHECKPOINTS_DIR, path.join(tmpDir, ".taskgraph", "checkpoints"));
-  assert.equal(envRecord.CHOREO_RUNS_DIR, path.join(tmpDir, ".taskgraph", "runs"));
+  assert.equal(envRecord.CHOREO_ARTIFACTS_DIR, path.join(tmpDir, ".dagain", "artifacts"));
+  assert.equal(envRecord.CHOREO_CHECKPOINTS_DIR, path.join(tmpDir, ".dagain", "checkpoints"));
+  assert.equal(envRecord.CHOREO_RUNS_DIR, path.join(tmpDir, ".dagain", "runs"));
   assert.ok(typeof envRecord.CHOREO_RUN_ID === "string" && envRecord.CHOREO_RUN_ID.trim() !== "");
   assert.ok(typeof envRecord.CHOREO_BIN === "string" && envRecord.CHOREO_BIN.endsWith(path.join("bin", "choreo.js")));
   await stat(envRecord.CHOREO_BIN);

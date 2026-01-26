@@ -43,7 +43,7 @@ test("status: shows in-progress nodes with log paths", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
   const now = new Date().toISOString();
   const runId = "2026-01-21T00-00-00-000Z-deadbe";
 
@@ -65,6 +65,6 @@ test("status: shows in-progress nodes with log paths", async () => {
   assert.match(text, /In progress:/i);
   assert.match(text, /\bplan-000\b/);
   assert.match(text, new RegExp(`\\brun=${runId.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}\\b`));
-  assert.match(text, new RegExp(`\\.taskgraph/runs/${runId}/stdout\\.log`));
+  assert.match(text, new RegExp(`\\.dagain/runs/${runId}/stdout\\.log`));
 });
 

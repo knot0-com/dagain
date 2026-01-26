@@ -58,7 +58,7 @@ test("chat: persists KV chat memory and injects it next run", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
+  const configPath = path.join(tmpDir, ".dagain", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(
@@ -93,7 +93,7 @@ test("chat: persists KV chat memory and injects it next run", async () => {
   assert.equal(first.code, 0, first.stderr || first.stdout);
   assert.match(first.stdout, /no-memory/);
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
   const rows = await sqliteJson(
     dbPath,
     "SELECT node_id, key, value_text FROM kv_latest WHERE node_id='__run__' AND key IN ('chat.turns','chat.summary','chat.last_ops') ORDER BY key;",

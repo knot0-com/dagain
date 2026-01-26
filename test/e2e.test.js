@@ -43,7 +43,7 @@ test("end-to-end: planner -> executor -> verifier -> done", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
+  const configPath = path.join(tmpDir, ".dagain", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(
@@ -88,7 +88,7 @@ test("end-to-end: planner -> executor -> verifier -> done", async () => {
   const hello = await readFile(helloPath, "utf8");
   assert.equal(hello, "hello from choreo\n");
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
   await stat(dbPath);
   const dbNodes = await sqliteJson(dbPath, "SELECT id, status FROM nodes ORDER BY id;");
   const dbStatuses = new Map(dbNodes.map((n) => [n.id, n.status]));
@@ -96,7 +96,7 @@ test("end-to-end: planner -> executor -> verifier -> done", async () => {
   assert.equal(dbStatuses.get("task-hello"), "done");
   assert.equal(dbStatuses.get("verify-hello"), "done");
 
-  const graphPath = path.join(tmpDir, ".taskgraph", "workgraph.json");
+  const graphPath = path.join(tmpDir, ".dagain", "workgraph.json");
   const graph = JSON.parse(await readFile(graphPath, "utf8"));
   const statuses = new Map(graph.nodes.map((n) => [n.id, n.status]));
   assert.equal(statuses.get("plan-000"), "done");
@@ -104,7 +104,7 @@ test("end-to-end: planner -> executor -> verifier -> done", async () => {
   assert.equal(statuses.get("verify-hello"), "done");
 
   // Persisted memory files
-  const memoryDir = path.join(tmpDir, ".taskgraph", "memory");
+  const memoryDir = path.join(tmpDir, ".dagain", "memory");
   const activityPath = path.join(memoryDir, "activity.log");
   const errorsPath = path.join(memoryDir, "errors.log");
   const activity = await readFile(activityPath, "utf8");
@@ -116,7 +116,7 @@ test("end-to-end: planner -> executor -> verifier -> done", async () => {
   await stat(errorsPath);
 
   // Persisted per-run artifacts
-  const runsDir = path.join(tmpDir, ".taskgraph", "runs");
+  const runsDir = path.join(tmpDir, ".dagain", "runs");
   const runIds = (await readdir(runsDir)).filter(Boolean).sort();
   assert.ok(runIds.length >= 3, `expected >=3 runs, got ${runIds.length}`);
   for (const runId of runIds) {

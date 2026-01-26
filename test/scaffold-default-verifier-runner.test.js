@@ -41,7 +41,7 @@ test("scaffolding: verify nodes default to config.defaults.verifyRunner", { time
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
+  const configPath = path.join(tmpDir, ".dagain", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(
@@ -78,7 +78,7 @@ test("scaffolding: verify nodes default to config.defaults.verifyRunner", { time
   });
   assert.equal(runRes.code, 0, runRes.stderr || runRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
   const verifyNodes = await sqliteJson(dbPath, "SELECT id, runner FROM nodes WHERE type='verify' ORDER BY id;");
   assert.ok(verifyNodes.length > 0, `expected verify nodes, got: ${JSON.stringify(verifyNodes)}`);
   for (const row of verifyNodes) {

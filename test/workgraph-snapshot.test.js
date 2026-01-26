@@ -41,8 +41,8 @@ test("exportWorkgraphJson: writes nodes snapshot from sqlite", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
-  const snapshotPath = path.join(tmpDir, ".taskgraph", "workgraph.json");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
+  const snapshotPath = path.join(tmpDir, ".dagain", "workgraph.json");
   await rm(snapshotPath, { force: true });
 
   await exportWorkgraphJson({ dbPath, snapshotPath });

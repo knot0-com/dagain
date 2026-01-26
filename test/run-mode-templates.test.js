@@ -85,7 +85,7 @@ async function setupProject({ goalText }) {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
+  const configPath = path.join(tmpDir, ".dagain", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(
@@ -115,7 +115,7 @@ async function setupProject({ goalText }) {
     "utf8",
   );
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
   await insertIntegrateNode({ dbPath, nodeId: "integrate-000" });
 
   const runRes = await runCli({
@@ -163,7 +163,7 @@ test("runMode=analysis: final verifier template discourages redundant heavy exec
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
+  const configPath = path.join(tmpDir, ".dagain", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(
@@ -193,7 +193,7 @@ test("runMode=analysis: final verifier template discourages redundant heavy exec
     "utf8",
   );
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
   await insertIntegrateNode({ dbPath, nodeId: "integrate-000" });
   await insertFinalVerifyNode({ dbPath, nodeId: "final-verify-000" });
 

@@ -74,12 +74,12 @@ async function setupProject({ packetMode }) {
   const findingsSentinel = "SENTINEL_FINDINGS_def456";
   const progressSentinel = "SENTINEL_PROGRESS_ghi789";
 
-  const memoryDir = path.join(tmpDir, ".taskgraph", "memory");
+  const memoryDir = path.join(tmpDir, ".dagain", "memory");
   await writeFile(path.join(memoryDir, "task_plan.md"), `${taskPlanSentinel}\n`, "utf8");
   await writeFile(path.join(memoryDir, "findings.md"), `${findingsSentinel}\n`, "utf8");
   await writeFile(path.join(memoryDir, "progress.md"), `${progressSentinel}\n`, "utf8");
 
-  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
+  const configPath = path.join(tmpDir, ".dagain", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(
@@ -109,7 +109,7 @@ async function setupProject({ packetMode }) {
     "utf8",
   );
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
   await insertTaskNode({ dbPath, nodeId: "task-001" });
 
   const runRes = await runCli({

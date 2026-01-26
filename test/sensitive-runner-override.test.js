@@ -41,7 +41,7 @@ test("run: .claude ownership routes claude -> fallback runner", { timeout: 10_00
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
+  const configPath = path.join(tmpDir, ".dagain", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(
@@ -72,7 +72,7 @@ test("run: .claude ownership routes claude -> fallback runner", { timeout: 10_00
     "utf8",
   );
 
-  const graphPath = path.join(tmpDir, ".taskgraph", "workgraph.json");
+  const graphPath = path.join(tmpDir, ".dagain", "workgraph.json");
   const graph = JSON.parse(await readFile(graphPath, "utf8"));
   const now = new Date().toISOString();
   graph.nodes = [

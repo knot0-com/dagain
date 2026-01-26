@@ -42,7 +42,7 @@ test("packet: renders Node Inputs from inputs_json refs", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
   const now = new Date().toISOString().replace(/'/g, "''");
   const inputsJson = JSON.stringify([{ nodeId: "__run__", key: "ctx.foo", as: "foo" }]).replace(/'/g, "''");
   await sqliteExec(
@@ -52,7 +52,7 @@ test("packet: renders Node Inputs from inputs_json refs", async () => {
       `UPDATE nodes SET inputs_json='${inputsJson}' WHERE id='plan-000';\n`,
   );
 
-  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
+  const configPath = path.join(tmpDir, ".dagain", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(

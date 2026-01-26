@@ -42,7 +42,7 @@ test("kv: CLI put writes kv_latest using env defaults", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
 
   const putRes = await runCli({
     binPath,

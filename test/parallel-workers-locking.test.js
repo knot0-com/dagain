@@ -44,7 +44,7 @@ test("workers: write/write ownership conflict serializes executors", async () =>
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
+  const configPath = path.join(tmpDir, ".dagain", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(
@@ -89,7 +89,7 @@ test("workers: write/write ownership conflict serializes executors", async () =>
   assert.equal(runRes.code, 0, runRes.stderr || runRes.stdout);
   assert.match(runRes.stdout + runRes.stderr, /All nodes done\./);
 
-  const activityPath = path.join(tmpDir, ".taskgraph", "memory", "activity.log");
+  const activityPath = path.join(tmpDir, ".dagain", "memory", "activity.log");
   const activity = await readFile(activityPath, "utf8");
 
   const spawnA = activity.search(/spawn role=executor .*node=task-a/);
@@ -115,7 +115,7 @@ test("workers: read/read ownership allows parallel verifiers", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const configPath = path.join(tmpDir, ".taskgraph", "config.json");
+  const configPath = path.join(tmpDir, ".dagain", "config.json");
   await writeFile(
     configPath,
     JSON.stringify(
@@ -145,7 +145,7 @@ test("workers: read/read ownership allows parallel verifiers", async () => {
     "utf8",
   );
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
   const now = new Date().toISOString().replace(/'/g, "''");
   await sqliteExec(
     dbPath,
@@ -170,7 +170,7 @@ test("workers: read/read ownership allows parallel verifiers", async () => {
   assert.equal(runRes.code, 0, runRes.stderr || runRes.stdout);
   assert.match(runRes.stdout + runRes.stderr, /All nodes done\./);
 
-  const activityPath = path.join(tmpDir, ".taskgraph", "memory", "activity.log");
+  const activityPath = path.join(tmpDir, ".dagain", "memory", "activity.log");
   const activity = await readFile(activityPath, "utf8");
 
   const spawn1 = activity.search(/spawn role=verifier .*node=verify-1/);

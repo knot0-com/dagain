@@ -115,7 +115,7 @@ test("mailbox: pause/resume gates scheduling", { timeout: 20_000 }, async () => 
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
   await writeFile(
-    path.join(tmpDir, ".taskgraph", "config.json"),
+    path.join(tmpDir, ".dagain", "config.json"),
     JSON.stringify(
       {
         version: 1,
@@ -143,7 +143,7 @@ test("mailbox: pause/resume gates scheduling", { timeout: 20_000 }, async () => 
     "utf8",
   );
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
   await seedDonePlan(dbPath);
   await seedTask(dbPath, { id: "task-a", title: "Write a", ownership: ["a.txt"] });
   await seedTask(dbPath, { id: "task-b", title: "Write b", ownership: ["b.txt"] });
@@ -200,7 +200,7 @@ test("mailbox: set-workers downscales concurrency", { timeout: 25_000 }, async (
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
   await writeFile(
-    path.join(tmpDir, ".taskgraph", "config.json"),
+    path.join(tmpDir, ".dagain", "config.json"),
     JSON.stringify(
       {
         version: 1,
@@ -228,7 +228,7 @@ test("mailbox: set-workers downscales concurrency", { timeout: 25_000 }, async (
     "utf8",
   );
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
   await seedDonePlan(dbPath);
   await seedTask(dbPath, { id: "task-1", title: "t1", ownership: ["t1.txt"] });
   await seedTask(dbPath, { id: "task-2", title: "t2", ownership: ["t2.txt"] });
@@ -289,7 +289,7 @@ test("mailbox: cancel aborts a running node", { timeout: 25_000 }, async () => {
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
   await writeFile(
-    path.join(tmpDir, ".taskgraph", "config.json"),
+    path.join(tmpDir, ".dagain", "config.json"),
     JSON.stringify(
       {
         version: 1,
@@ -316,7 +316,7 @@ test("mailbox: cancel aborts a running node", { timeout: 25_000 }, async () => {
     "utf8",
   );
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
   await seedDonePlan(dbPath);
   await seedTask(dbPath, { id: "task-long", title: "long task", ownership: ["long.txt"] });
 
@@ -360,7 +360,7 @@ test("mailbox: cancel aborts a running node", { timeout: 25_000 }, async () => {
     const runRes = await done;
     assert.equal(runRes.code, 0, runRes.stderr || runRes.stdout);
 
-    const lockPath = path.join(tmpDir, ".taskgraph", "lock");
+    const lockPath = path.join(tmpDir, ".dagain", "lock");
     await assert.rejects(() => readFile(lockPath, "utf8"));
   } finally {
     try {
@@ -404,7 +404,7 @@ test("mailbox: replan pauses non-planner until plan completes", { timeout: 25_00
   );
 
   await writeFile(
-    path.join(tmpDir, ".taskgraph", "config.json"),
+    path.join(tmpDir, ".dagain", "config.json"),
     JSON.stringify(
       {
         version: 1,
@@ -432,7 +432,7 @@ test("mailbox: replan pauses non-planner until plan completes", { timeout: 25_00
     "utf8",
   );
 
-  const dbPath = path.join(tmpDir, ".taskgraph", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
   await seedDonePlan(dbPath);
   await seedTask(dbPath, { id: "task-a", title: "Write a", ownership: ["a.txt"] });
   await seedTask(dbPath, { id: "task-b", title: "Write b", ownership: ["b.txt"] });

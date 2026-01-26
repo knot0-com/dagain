@@ -75,5 +75,5 @@ test("chat: non-tty default prints usage; force flag enters chat", async () => {
     input: "/exit\n",
   });
   assert.equal(forced.code, 0, forced.stderr || forced.stdout);
-  assert.match(forced.stdout, /taskgraph chat \(type \/help\)/);
+  assert.match(forced.stdout, /dagain chat \(type \/help\)/);
 });
