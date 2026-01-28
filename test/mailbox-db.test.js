@@ -28,9 +28,9 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("mailbox: enqueue -> claim -> ack", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-mailbox-db-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-mailbox-db-"));
 
   const initRes = await runCli({
     binPath,
@@ -62,9 +62,9 @@ test("mailbox: enqueue -> claim -> ack", async () => {
 });
 
 test("mailbox: args_json persists for set-workers", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-mailbox-args-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-mailbox-args-"));
 
   const initRes = await runCli({
     binPath,

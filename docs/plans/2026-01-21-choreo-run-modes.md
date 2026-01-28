@@ -1,4 +1,4 @@
-# Choreo Run Modes (Auto) Implementation Plan
+# Dagain Run Modes (Auto) Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
@@ -6,7 +6,7 @@
 
 **Architecture:** Add a deterministic `inferRunMode(goalText, config)` helper (with optional override), compute a `runMode` for each node packet from `GOAL.md`, and propagate it as:
 - Template var: `{{RUN_MODE}}`
-- Runner env var: `CHOREO_RUN_MODE`
+- Runner env var: `DAGAIN_RUN_MODE`
 
 For `integrator` and `finalVerifier`, select mode-specific templates when `runMode==="analysis"`:
 - `integrator-analysis.md`
@@ -14,7 +14,7 @@ For `integrator` and `finalVerifier`, select mode-specific templates when `runMo
 
 Keep existing templates for `coding`.
 
-**Tech Stack:** Node.js (ESM), `node:test`, Choreo CLI (`src/cli.js`), templates (`templates/*.md`).
+**Tech Stack:** Node.js (ESM), `node:test`, Dagain CLI (`src/cli.js`), templates (`templates/*.md`).
 
 ---
 
@@ -26,10 +26,10 @@ Keep existing templates for `coding`.
 - Test: `test/run-mode-templates.test.js` (new)
 
 **Step 1: Write a failing test for template selection**
-- Create a temp project with `choreo init`.
+- Create a temp project with `dagain init`.
 - Write a `GOAL.md` containing obvious analysis keywords (e.g., “analyze… data… report…”).
 - Insert an `integrate-000` node in sqlite and configure `integrator` runner to dump packet content (reuse `scripts/mock-agent-packet-dump.js`).
-- Run `choreo run --once` and assert the generated packet contains an analysis-template sentinel string.
+- Run `dagain run --once` and assert the generated packet contains an analysis-template sentinel string.
 
 **Step 2: Implement `inferRunMode`**
 - Support (in order):
@@ -39,7 +39,7 @@ Keep existing templates for `coding`.
 
 **Step 3: Pass runMode into packet rendering**
 - Add `RUN_MODE` to the `renderTemplate()` vars.
-- Add `CHOREO_RUN_MODE` to the runner env (`choreoRunnerEnv`).
+- Add `DAGAIN_RUN_MODE` to the runner env (`dagainRunnerEnv`).
 
 **Step 4: Run test**
 - Run: `node --test test/run-mode-templates.test.js`
@@ -56,14 +56,14 @@ Keep existing templates for `coding`.
 - Modify: `src/cli.js` (copyTemplates list)
 
 **Step 1: Add analysis templates**
-- `integrator-analysis.md` must explicitly forbid git merge/rebase and repo-wide test suites; it should verify artifacts + update `.choreo/memory/*` + write KV `out.summary`.
+- `integrator-analysis.md` must explicitly forbid git merge/rebase and repo-wide test suites; it should verify artifacts + update `.dagain/memory/*` + write KV `out.summary`.
 - `final-verifier-analysis.md` should verify artifacts against `GOAL.md` “Done means” and avoid repo-wide test suites.
 
 **Step 2: Wire template name selection**
 - If `role === "integrator"` and `runMode === "analysis"`, use `integrator-analysis` template.
 - If `role === "finalVerifier"` and `runMode === "analysis"`, use `final-verifier-analysis` template.
 
-**Step 3: Ensure `choreo init` copies these templates**
+**Step 3: Ensure `dagain init` copies these templates**
 - Add the new template names to the `copyTemplates()` list.
 
 **Step 4: Run test**
@@ -78,7 +78,7 @@ Keep existing templates for `coding`.
 - Modify: `README.md`
 
 **Step 1: Add docs section**
-- Describe `CHOREO_RUN_MODE` and `{{RUN_MODE}}`.
+- Describe `DAGAIN_RUN_MODE` and `{{RUN_MODE}}`.
 - Mention optional `GOAL.md` line `Run mode: analysis|coding`.
 - Mention config override `supervisor.runMode` and default behavior.
 

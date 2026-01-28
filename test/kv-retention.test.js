@@ -31,9 +31,9 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("kv: keeps last 5 history rows per key", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-kv-"));
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-kv-"));
 
   const initRes = await runCli({
     binPath,
@@ -67,4 +67,3 @@ test("kv: keeps last 5 history rows per key", async () => {
   assert.equal(history[0]?.value_text, "2");
   assert.equal(history[4]?.value_text, "6");
 });
-

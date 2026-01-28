@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "./lib/args.js";
 import { sha256File } from "./lib/crypto.js";
 import { appendLine, ensureDir, pathExists, readJson, writeJsonAtomic } from "./lib/fs.js";
-import { choreoPaths, defaultConfig, loadConfig, saveConfig } from "./lib/config.js";
+import { dagainPaths, defaultConfig, loadConfig, saveConfig } from "./lib/config.js";
 import { defaultWorkgraph, loadWorkgraph, saveWorkgraph, countByStatus } from "./lib/workgraph.js";
 import { selectNextNode } from "./lib/select.js";
 import { formatBullets, renderTemplate } from "./lib/template.js";
@@ -91,7 +91,7 @@ async function resolveRunnerNameFromPool({ dbPath, role, seed, attempts, config 
 }
 
 function usage() {
-  return `dagain (aliases: taskgraph, choreo)
+  return `dagain (alias: taskgraph)
 
 Usage:
   dagain [<goal...>] [--color] [--no-color]
@@ -129,9 +129,9 @@ State:
 async function maybeMigrateLegacyStateDir(rootDir) {
   const canonicalDir = path.join(rootDir, ".dagain");
   const legacyTaskgraphDir = path.join(rootDir, ".taskgraph");
-  const legacyChoreoDir = path.join(rootDir, ".choreo");
 
   if (await pathExists(canonicalDir)) return;
+  if (!(await pathExists(legacyTaskgraphDir))) return;
 
   const ensureAliasSymlink = async (aliasPath) => {
     try {
@@ -152,27 +152,13 @@ async function maybeMigrateLegacyStateDir(rootDir) {
     }
   };
 
-  const migrateFrom = async (fromDir) => {
-    try {
-      await rename(fromDir, canonicalDir);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
-  if (await pathExists(legacyTaskgraphDir)) {
-    if (!(await migrateFrom(legacyTaskgraphDir))) return;
-    await ensureAliasSymlink(legacyTaskgraphDir);
-    await ensureAliasSymlink(legacyChoreoDir);
+  try {
+    await rename(legacyTaskgraphDir, canonicalDir);
+  } catch {
     return;
   }
 
-  if (await pathExists(legacyChoreoDir)) {
-    if (!(await migrateFrom(legacyChoreoDir))) return;
-    await ensureAliasSymlink(legacyTaskgraphDir);
-    await ensureAliasSymlink(legacyChoreoDir);
-  }
+  await ensureAliasSymlink(legacyTaskgraphDir);
 }
 
 function nowIso() {
@@ -263,7 +249,7 @@ function sqlQuote(value) {
 
 function isPromptEnabled() {
   if (process.stdin.isTTY && process.stdout.isTTY) return true;
-  return String(process.env.CHOREO_FORCE_PROMPT || "").trim() === "1";
+  return String(process.env.DAGAIN_FORCE_PROMPT || "").trim() === "1";
 }
 
 let passwdByUidCache = null;
@@ -335,23 +321,23 @@ function mergeEnv(a, b) {
   return Object.keys(out).length > 0 ? out : null;
 }
 
-function choreoRunnerEnv(paths, { nodeId, runId, parentNodeId = "", runMode = "" }) {
-  const choreoBin = fileURLToPath(new URL("../bin/choreo.js", import.meta.url));
+function dagainRunnerEnv(paths, { nodeId, runId, parentNodeId = "", runMode = "" }) {
+  const dagainBin = fileURLToPath(new URL("../bin/dagain.js", import.meta.url));
   const shellVerifier = fileURLToPath(new URL("../scripts/shell-verifier.js", import.meta.url));
   const shellMerge = fileURLToPath(new URL("../scripts/shell-merge.js", import.meta.url));
   const mode = String(runMode || "").trim();
   return {
-    CHOREO_DB: paths.dbPath,
-    CHOREO_NODE_ID: nodeId,
-    CHOREO_RUN_ID: runId,
-    CHOREO_PARENT_NODE_ID: parentNodeId,
-    CHOREO_ARTIFACTS_DIR: paths.artifactsDir,
-    CHOREO_CHECKPOINTS_DIR: paths.checkpointsDir,
-    CHOREO_RUNS_DIR: paths.runsDir,
-    CHOREO_BIN: choreoBin,
-    CHOREO_SHELL_VERIFIER: shellVerifier,
-    CHOREO_SHELL_MERGE: shellMerge,
-    CHOREO_RUN_MODE: mode,
+    DAGAIN_DB: paths.dbPath,
+    DAGAIN_NODE_ID: nodeId,
+    DAGAIN_RUN_ID: runId,
+    DAGAIN_PARENT_NODE_ID: parentNodeId,
+    DAGAIN_ARTIFACTS_DIR: paths.artifactsDir,
+    DAGAIN_CHECKPOINTS_DIR: paths.checkpointsDir,
+    DAGAIN_RUNS_DIR: paths.runsDir,
+    DAGAIN_BIN: dagainBin,
+    DAGAIN_SHELL_VERIFIER: shellVerifier,
+    DAGAIN_SHELL_MERGE: shellMerge,
+    DAGAIN_RUN_MODE: mode,
   };
 }
 
@@ -408,18 +394,18 @@ async function chownTree(rootPath, uid, gid, { maxEntries = 25_000 } = {}) {
   await visit(rootPath);
 }
 
-async function repairChoreoStateOwnership({ paths, ui }) {
+async function repairDagainStateOwnership({ paths, ui }) {
   const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
   if (!isRoot) return;
-  if (!(await pathExists(paths.choreoDir))) return;
+  if (!(await pathExists(paths.stateDir))) return;
 
   const identity = await resolveSpawnIdentity({ rootDir: paths.rootDir });
   if (!identity) return;
 
   try {
-    await chownTree(paths.choreoDir, identity.uid, identity.gid);
+    await chownTree(paths.stateDir, identity.uid, identity.gid);
     try {
-      await chmod(paths.choreoDir, 0o755);
+      await chmod(paths.stateDir, 0o755);
     } catch {
       // ignore
     }
@@ -758,14 +744,14 @@ async function readBuiltInTemplate(role) {
 }
 
 async function resolveTemplate(rootDir, role) {
-  const { templatesDir } = choreoPaths(rootDir);
+  const { templatesDir } = dagainPaths(rootDir);
   const localPath = path.join(templatesDir, `${role}.md`);
   if (await pathExists(localPath)) return readFile(localPath, "utf8");
   return readBuiltInTemplate(role);
 }
 
 async function copyTemplates(rootDir, { force = false } = {}) {
-  const { templatesDir } = choreoPaths(rootDir);
+  const { templatesDir } = dagainPaths(rootDir);
   await ensureDir(templatesDir);
   const roles = [
     "planner",
@@ -787,7 +773,7 @@ async function copyTemplates(rootDir, { force = false } = {}) {
 }
 
 async function initCommand(rootDir, flags) {
-  const paths = choreoPaths(rootDir);
+  const paths = dagainPaths(rootDir);
   const force = Boolean(flags.force);
   const noTemplates = Boolean(flags["no-templates"]);
   const noRefine = Boolean(flags["no-refine"]) || Boolean(flags.noRefine);
@@ -799,7 +785,7 @@ async function initCommand(rootDir, flags) {
   const noColor = resolveNoColorFlag(flags);
   const forceColor = resolveForceColorFlag(flags);
 
-  await ensureDir(paths.choreoDir);
+  await ensureDir(paths.stateDir);
   await ensureDir(paths.checkpointsDir);
   await ensureDir(paths.runsDir);
   await ensureDir(paths.memoryDir);
@@ -902,9 +888,9 @@ async function initCommand(rootDir, flags) {
   const taskPlanPath = path.join(paths.memoryDir, "task_plan.md");
   const findingsPath = path.join(paths.memoryDir, "findings.md");
 
-  if (!(await pathExists(progressPath))) await writeFile(progressPath, "# Choreo Progress\n", "utf8");
-  if (!(await pathExists(guardrailsPath))) await writeFile(guardrailsPath, "# Choreo Guardrails\n", "utf8");
-  if (!(await pathExists(patternsPath))) await writeFile(patternsPath, "# Choreo Patterns\n", "utf8");
+  if (!(await pathExists(progressPath))) await writeFile(progressPath, "# Dagain Progress\n", "utf8");
+  if (!(await pathExists(guardrailsPath))) await writeFile(guardrailsPath, "# Dagain Guardrails\n", "utf8");
+  if (!(await pathExists(patternsPath))) await writeFile(patternsPath, "# Dagain Patterns\n", "utf8");
   if (!(await pathExists(activityPath))) await writeFile(activityPath, "", "utf8");
   if (!(await pathExists(errorsPath))) await writeFile(errorsPath, "", "utf8");
   if (!(await pathExists(goalDialogPath))) await writeFile(goalDialogPath, "# Goal Dialog\n", "utf8");
@@ -919,8 +905,8 @@ async function initCommand(rootDir, flags) {
     // ignore
   }
 
-  await repairChoreoStateOwnership({ paths });
-  process.stdout.write(`Initialized dagain state in ${paths.choreoDir}\n`);
+  await repairDagainStateOwnership({ paths });
+  process.stdout.write(`Initialized dagain state in ${paths.stateDir}\n`);
 
   if (goalFlag && !noRefine) {
     if (!config) throw new Error("Missing .dagain/config.json after init");
@@ -938,7 +924,7 @@ async function initCommand(rootDir, flags) {
 }
 
 async function goalCommand(rootDir, flags) {
-  const paths = choreoPaths(rootDir);
+  const paths = dagainPaths(rootDir);
   const config = await loadConfig(paths.configPath);
   if (!config) throw new Error("Missing .dagain/config.json. Run `dagain init` first.");
 
@@ -975,7 +961,7 @@ async function goalCommand(rootDir, flags) {
 }
 
 async function startCommand(rootDir, flags, positionalGoalTokens) {
-  const paths = choreoPaths(rootDir);
+  const paths = dagainPaths(rootDir);
   const live = resolveLiveFlag(flags);
   const noRefine = Boolean(flags["no-refine"]) || Boolean(flags.noRefine);
 
@@ -1162,7 +1148,7 @@ async function refineGoalInteractive({
       const spinner = !live ? ui.spinnerStart(`goal-refine ${turn}/${maxTurns} (${runnerName})`) : null;
       const runnerEnv = mergeEnv(
         mergeEnv(resolveRunnerEnv({ runnerName, runner, cwd: paths.rootDir, paths }), identityEnv),
-        choreoRunnerEnv(paths, { nodeId: "goal-refine", runId: run }),
+        dagainRunnerEnv(paths, { nodeId: "goal-refine", runId: run }),
       );
       await ensureRunnerTmpDir(runnerEnv);
       if (runnerName === "claude")
@@ -1290,7 +1276,7 @@ async function refineGoalInteractive({
   } finally {
     rl.close();
     cancel.cleanup();
-    await repairChoreoStateOwnership({ paths, ui });
+    await repairDagainStateOwnership({ paths, ui });
   }
 }
 
@@ -1387,7 +1373,7 @@ function formatNodeLine(node) {
 }
 
 async function statusCommand(rootDir) {
-  const paths = choreoPaths(rootDir);
+  const paths = dagainPaths(rootDir);
   const hasDb = Boolean(paths.dbPath && (await pathExists(paths.dbPath)));
   const graph = hasDb ? await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath }) : await loadWorkgraph(paths.graphPath);
   if (!graph) throw new Error("Missing .dagain state. Run `dagain init`.");
@@ -1495,7 +1481,7 @@ function validateGraph(graph) {
 }
 
 async function graphValidateCommand(rootDir) {
-  const paths = choreoPaths(rootDir);
+  const paths = dagainPaths(rootDir);
   const graph = await loadWorkgraph(paths.graphPath);
   if (!graph) throw new Error("Missing .dagain/workgraph.json. Run `dagain init`.");
   validateGraph(graph);
@@ -1562,7 +1548,7 @@ function diagnoseNoRunnableNodes(graph) {
 }
 
 async function runCommand(rootDir, flags) {
-  const paths = choreoPaths(rootDir);
+  const paths = dagainPaths(rootDir);
   const config = await loadConfig(paths.configPath);
   if (!config) throw new Error("Missing .dagain/config.json. Run `dagain init`.");
   if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
@@ -1610,13 +1596,13 @@ async function runCommand(rootDir, flags) {
   ui.writeLine(ui.hr("dagain run"));
   ui.detail(`root: ${paths.rootDir}`);
   ui.detail(`goal: ${path.relative(paths.rootDir, paths.goalPath) || "GOAL.md"}`);
-  ui.detail(`state: ${path.relative(paths.rootDir, paths.choreoDir) || ".dagain"}`);
+  ui.detail(`state: ${path.relative(paths.rootDir, paths.stateDir) || ".dagain"}`);
   if (workers > 1) ui.detail(`workers: ${workers}`);
   if (worktreeMode !== "off" && worktreesDir) ui.detail(`worktrees: ${worktreeMode} (${path.relative(paths.rootDir, worktreesDir) || worktreesDir})`);
   ui.writeLine(ui.hr());
 
   let acquired = false;
-  await repairChoreoStateOwnership({ paths, ui });
+  await repairDagainStateOwnership({ paths, ui });
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const acquireRes = await acquireSupervisorLock(paths.lockPath, { staleSeconds: staleLockSeconds });
     if (acquireRes.ok) {
@@ -1891,7 +1877,7 @@ async function runCommand(rootDir, flags) {
             inFlight.delete(node.id);
             locks.release(node.id);
             abortControllersByNodeId.delete(node.id);
-            await serial.enqueue(async () => repairChoreoStateOwnership({ paths, ui }));
+            await serial.enqueue(async () => repairDagainStateOwnership({ paths, ui }));
           });
 
         inFlight.set(node.id, promise);
@@ -2441,7 +2427,7 @@ async function runCommand(rootDir, flags) {
       } finally {
         abortControllersByNodeId.delete(node.id);
       }
-      await repairChoreoStateOwnership({ paths, ui });
+      await repairDagainStateOwnership({ paths, ui });
       if (once) return;
     }
   } finally {
@@ -2450,7 +2436,7 @@ async function runCommand(rootDir, flags) {
     cancel.cleanup();
     await appendLine(activityPath, `[${nowIso()}] supervisor-exit pid=${process.pid}`);
     await releaseSupervisorLock(paths.lockPath);
-    await repairChoreoStateOwnership({ paths, ui });
+    await repairDagainStateOwnership({ paths, ui });
   }
 }
 
@@ -2931,7 +2917,7 @@ async function executeNode({
   const liveLinePrefix = consoleUi.c.gray(multiWorker ? `│${node.id}│` : "│") + " ";
   const runnerEnv = mergeEnv(
     mergeEnv(resolveRunnerEnv({ runnerName, runner, cwd: runnerCwd, paths }), identityEnv),
-    choreoRunnerEnv(paths, { nodeId: node.id, runId: run, runMode }),
+    dagainRunnerEnv(paths, { nodeId: node.id, runId: run, runMode }),
   );
   await ensureRunnerTmpDir(runnerEnv);
   if (runnerName === "claude")
@@ -3623,7 +3609,7 @@ async function runChatMicrocall({ rootDir, paths, config, prompt, runnerName, ro
   if (!runner?.cmd) throw new Error(`Unknown runner: ${pickedRunnerName}`);
 
   const microId = `chat-${runId()}`;
-  const microcallsBaseDir = path.join(paths.choreoDir, "microcalls");
+  const microcallsBaseDir = path.join(paths.stateDir, "microcalls");
   const microDir = path.join(microcallsBaseDir, microId);
   await ensureDir(microDir);
 
@@ -3669,14 +3655,14 @@ async function runChatMicrocall({ rootDir, paths, config, prompt, runnerName, ro
 }
 
 async function startSupervisorDetached({ rootDir, flags }) {
-  const paths = choreoPaths(rootDir);
+  const paths = dagainPaths(rootDir);
   const lock = await readSupervisorLock(paths.lockPath);
   if (lock?.pid && String(lock.host || "").trim() === os.hostname()) {
     process.stdout.write(`Supervisor already running pid=${lock.pid}.\n`);
     return;
   }
-  const choreoBin = fileURLToPath(new URL("../bin/choreo.js", import.meta.url));
-  const args = [choreoBin, "run", "--no-live", "--no-color"];
+  const dagainBin = fileURLToPath(new URL("../bin/dagain.js", import.meta.url));
+  const args = [dagainBin, "run", "--no-live", "--no-color"];
   const child = spawn(process.execPath, args, {
     cwd: paths.rootDir,
     env: { ...process.env, NO_COLOR: "1" },
@@ -3688,7 +3674,7 @@ async function startSupervisorDetached({ rootDir, flags }) {
 }
 
 async function chatCommand(rootDir, flags) {
-  const paths = choreoPaths(rootDir);
+  const paths = dagainPaths(rootDir);
   if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
   const config = await loadConfig(paths.configPath);
   if (!config) throw new Error("Missing .dagain/config.json. Run `dagain init`.");
@@ -3924,11 +3910,11 @@ async function chatCommand(rootDir, flags) {
             memorySection = lines.join("\n");
           }
 
-	          const prompt =
-	            `You are Choreo Chat Router.\n` +
-	            `Return JSON in <result> with {status, summary, data:{reply, ops, rollup}}.\n` +
-	            `Allowed ops:\n` +
-	            `- {"type":"status"}\n` +
+		          const prompt =
+		            `You are Dagain Chat Router.\n` +
+		            `Return JSON in <result> with {status, summary, data:{reply, ops, rollup}}.\n` +
+		            `Allowed ops:\n` +
+		            `- {"type":"status"}\n` +
             `- {"type":"control.pause"}\n` +
             `- {"type":"control.resume"}\n` +
             `- {"type":"control.setWorkers","workers":3}\n` +
@@ -3941,11 +3927,11 @@ async function chatCommand(rootDir, flags) {
             `- {"type":"dep.remove","nodeId":"task-002","dependsOnId":"task-001"}\n` +
             `- {"type":"run.start"}\n` +
             `- {"type":"run.stop","signal":"SIGTERM"}\n` +
-	            `Rules:\n` +
-	            `- Do not tell the user to run CLI commands; emit ops and Choreo will execute them.\n` +
-	            `- Use control.* ops for supervisor controls (pause/resume/workers/replan/cancel).\n` +
-	            `- Always include data.rollup as an updated rolling summary (<= 800 chars). If Chat memory includes rolling_summary, update it.\n` +
-	            `- Prefer ops for status checks and simple replanning.\n` +
+		            `Rules:\n` +
+		            `- Do not tell the user to run CLI commands; emit ops and Dagain will execute them.\n` +
+		            `- Use control.* ops for supervisor controls (pause/resume/workers/replan/cancel).\n` +
+		            `- Always include data.rollup as an updated rolling summary (<= 800 chars). If Chat memory includes rolling_summary, update it.\n` +
+		            `- Prefer ops for status checks and simple replanning.\n` +
 	            `- If unclear, ask one clarifying question in reply and ops=[].\n` +
 	            (memorySection ? `\n${memorySection}\n` : "\n") +
             `\n` +
@@ -4130,7 +4116,7 @@ async function chatCommand(rootDir, flags) {
 }
 
 async function nodeCommand(rootDir, positional, flags) {
-  const paths = choreoPaths(rootDir);
+  const paths = dagainPaths(rootDir);
   const config = await loadConfig(paths.configPath);
   if (!config) throw new Error("Missing .dagain/config.json. Run `dagain init`.");
   if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
@@ -4296,7 +4282,7 @@ async function nodeCommand(rootDir, positional, flags) {
 }
 
 async function depCommand(rootDir, positional, flags) {
-  const paths = choreoPaths(rootDir);
+  const paths = dagainPaths(rootDir);
   if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
   await ensureDepsRequiredStatusColumn({ dbPath: paths.dbPath });
 
@@ -4370,7 +4356,7 @@ async function depCommand(rootDir, positional, flags) {
 }
 
 async function controlCommand(rootDir, positional, flags) {
-  const paths = choreoPaths(rootDir);
+  const paths = dagainPaths(rootDir);
   if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
   await ensureMailboxTable({ dbPath: paths.dbPath });
 
@@ -4421,7 +4407,7 @@ async function controlCommand(rootDir, positional, flags) {
 export async function main(argv) {
   const { command, positional, flags } = parseArgs(argv);
   const rootDir = process.cwd();
-  const forceChat = String(process.env.CHOREO_FORCE_CHAT || "").trim() === "1";
+  const forceChat = String(process.env.DAGAIN_FORCE_CHAT || "").trim() === "1";
   const interactive = (process.stdin.isTTY && process.stdout.isTTY) || forceChat;
 
   if (!(flags.h || flags.help) && (command || interactive)) {
@@ -4433,7 +4419,7 @@ export async function main(argv) {
       process.stdout.write(usage());
       return;
     }
-    const paths = choreoPaths(rootDir);
+    const paths = dagainPaths(rootDir);
     if (await pathExists(paths.dbPath)) await chatCommand(rootDir, flags);
     else await startCommand(rootDir, flags, []);
     return;
@@ -4524,7 +4510,7 @@ export async function main(argv) {
 }
 
 async function stopCommand(rootDir, flags) {
-  const paths = choreoPaths(rootDir);
+  const paths = dagainPaths(rootDir);
   const ui = createUi({ noColor: resolveNoColorFlag(flags), forceColor: resolveForceColorFlag(flags) });
 
   const lock = await readSupervisorLock(paths.lockPath);
@@ -4568,15 +4554,15 @@ async function stopCommand(rootDir, flags) {
 }
 
 async function templatesSyncCommand(rootDir, flags) {
-  const paths = choreoPaths(rootDir);
-  if (!(await pathExists(paths.choreoDir))) throw new Error("Missing .dagain directory. Run `dagain init` first.");
+  const paths = dagainPaths(rootDir);
+  if (!(await pathExists(paths.stateDir))) throw new Error("Missing .dagain directory. Run `dagain init` first.");
   const force = Boolean(flags.force);
   await copyTemplates(rootDir, { force });
   process.stdout.write(`Templates synced${force ? " (force)" : ""}.\n`);
 }
 
 async function answerCommand(rootDir, flags) {
-  const paths = choreoPaths(rootDir);
+  const paths = dagainPaths(rootDir);
   const ui = createUi({ noColor: resolveNoColorFlag(flags), forceColor: resolveForceColorFlag(flags) });
   const cancel = installCancellation({ ui, label: "answer" });
   const abortSignal = cancel.signal;
@@ -4728,7 +4714,7 @@ async function answerCommand(rootDir, flags) {
 }
 
 async function kvCommand(rootDir, positional, flags) {
-  const paths = choreoPaths(rootDir);
+  const paths = dagainPaths(rootDir);
   const ui = createUi({ noColor: resolveNoColorFlag(flags), forceColor: resolveForceColorFlag(flags) });
 
   const sub = String(positional?.[0] || "").trim().toLowerCase();
@@ -4737,16 +4723,16 @@ async function kvCommand(rootDir, positional, flags) {
     return;
   }
 
-  const dbPath = String(process.env.CHOREO_DB || paths.dbPath || "").trim();
+  const dbPath = String(process.env.DAGAIN_DB || paths.dbPath || "").trim();
   if (!dbPath || !(await pathExists(dbPath))) throw new Error("Missing state DB. Run `dagain init`.");
 
   const runScoped = Boolean(flags.run);
   const nodeFlag = typeof flags.node === "string" ? flags.node.trim() : "";
-  const envNodeId = String(process.env.CHOREO_NODE_ID || "").trim();
+  const envNodeId = String(process.env.DAGAIN_NODE_ID || "").trim();
   const nodeId = runScoped ? "__run__" : nodeFlag || envNodeId;
 
   if ((sub === "get" || sub === "put" || sub === "ls") && !nodeId) {
-    throw new Error("Missing node id. Provide `--node <id>` or set $CHOREO_NODE_ID (or use `--run`).");
+    throw new Error("Missing node id. Provide `--node <id>` or set $DAGAIN_NODE_ID (or use `--run`).");
   }
 
   const key = typeof flags.key === "string" ? flags.key.trim() : "";
@@ -4798,7 +4784,7 @@ async function kvCommand(rootDir, positional, flags) {
       nodeId,
       key,
       valueText,
-      runId: String(process.env.CHOREO_RUN_ID || "").trim() || null,
+      runId: String(process.env.DAGAIN_RUN_ID || "").trim() || null,
       nowIso: nowIso(),
     });
     ui.event("done", `Wrote ${nodeId}:${key}`);
@@ -4809,7 +4795,7 @@ async function kvCommand(rootDir, positional, flags) {
 }
 
 async function microcallCommand(rootDir, flags) {
-  const paths = choreoPaths(rootDir);
+  const paths = dagainPaths(rootDir);
 
   const prompt = typeof flags.prompt === "string" ? flags.prompt.trim() : "";
   if (!prompt) throw new Error('Missing prompt. Provide `--prompt "..."`.');
@@ -4824,10 +4810,10 @@ async function microcallCommand(rootDir, flags) {
   if (!runner?.cmd) throw new Error(`Unknown runner: ${runnerName}`);
 
   const microId = `micro-${runId()}`;
-  const parentRunId = String(process.env.CHOREO_RUN_ID || "").trim();
+  const parentRunId = String(process.env.DAGAIN_RUN_ID || "").trim();
   const microcallsBaseDir = parentRunId
     ? path.join(paths.runsDir, parentRunId, "microcalls")
-    : path.join(paths.choreoDir, "microcalls");
+    : path.join(paths.stateDir, "microcalls");
   const microDir = path.join(microcallsBaseDir, microId);
   await ensureDir(microDir);
 
@@ -4874,13 +4860,14 @@ async function microcallCommand(rootDir, flags) {
 
   const storeKey = typeof flags["store-key"] === "string" ? flags["store-key"].trim() : "";
   if (storeKey) {
-    const dbPath = String(process.env.CHOREO_DB || paths.dbPath || "").trim();
-    if (!dbPath || !(await pathExists(dbPath))) throw new Error("Missing $CHOREO_DB for --store-key (or run `dagain init`).");
+    const dbPath = String(process.env.DAGAIN_DB || paths.dbPath || "").trim();
+    if (!dbPath || !(await pathExists(dbPath)))
+      throw new Error("Missing $DAGAIN_DB for --store-key (or run `dagain init`).");
 
     const storeRunScoped = Boolean(flags.run);
-    const envNodeId = String(process.env.CHOREO_NODE_ID || "").trim();
+    const envNodeId = String(process.env.DAGAIN_NODE_ID || "").trim();
     const nodeId = storeRunScoped ? "__run__" : envNodeId;
-    if (!nodeId) throw new Error("Missing $CHOREO_NODE_ID for --store-key (or use --run).");
+    if (!nodeId) throw new Error("Missing $DAGAIN_NODE_ID for --store-key (or use --run).");
 
     await kvPut({
       dbPath,
@@ -5086,9 +5073,9 @@ function defaultTaskPlanMarkdown() {
     "See `GOAL.md`.\n" +
     "\n" +
     "## Workgraph (auto)\n" +
-    "<!-- CHOREO:BEGIN_WORKGRAPH -->\n" +
+    "<!-- DAGAIN:BEGIN_WORKGRAPH -->\n" +
     "- (pending)\n" +
-    "<!-- CHOREO:END_WORKGRAPH -->\n" +
+    "<!-- DAGAIN:END_WORKGRAPH -->\n" +
     "\n" +
     "## Notes\n" +
     "-\n"
@@ -5097,8 +5084,8 @@ function defaultTaskPlanMarkdown() {
 
 async function syncTaskPlan({ paths, graph }) {
   const taskPlanPath = path.join(paths.memoryDir, "task_plan.md");
-  const start = "<!-- CHOREO:BEGIN_WORKGRAPH -->";
-  const end = "<!-- CHOREO:END_WORKGRAPH -->";
+  const start = "<!-- DAGAIN:BEGIN_WORKGRAPH -->";
+  const end = "<!-- DAGAIN:END_WORKGRAPH -->";
 
   const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
   const lines = [];
@@ -5124,13 +5111,10 @@ async function syncTaskPlan({ paths, graph }) {
     current = defaultTaskPlanMarkdown();
   }
 
-  const startIdx = current.indexOf(start);
-  const endIdx = current.indexOf(end);
+  const blockRe = /<!--\\s*[^>]*BEGIN_WORKGRAPH\\s*-->[\\s\\S]*?<!--\\s*[^>]*END_WORKGRAPH\\s*-->/;
   let out = current;
-  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-    const before = current.slice(0, startIdx + start.length);
-    const after = current.slice(endIdx);
-    out = `${before}\n${replacement}\n${after}`;
+  if (blockRe.test(current)) {
+    out = current.replace(blockRe, `${start}\n${replacement}\n${end}`);
   } else {
     out = current.trimEnd() + `\n\n## Workgraph (auto)\n${start}\n${replacement}\n${end}\n`;
   }

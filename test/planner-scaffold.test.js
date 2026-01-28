@@ -28,12 +28,12 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("planner scaffolding: tasks-only plan still runs verifier/integrator/finalVerifier", { timeout: 15_000 }, async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
   const plannerPath = fileURLToPath(new URL("../scripts/mock-planner-tasks-only.js", import.meta.url));
   const logAgentPath = fileURLToPath(new URL("../scripts/mock-agent-log.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-planner-scaffold-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-planner-scaffold-"));
 
   const initRes = await runCli({
     binPath,
@@ -88,12 +88,12 @@ test("planner scaffolding: tasks-only plan still runs verifier/integrator/finalV
 });
 
 test("multiVerifier=all: scaffolding fans out verify nodes per verifier runner", { timeout: 15_000 }, async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
   const plannerPath = fileURLToPath(new URL("../scripts/mock-planner-tasks-only.js", import.meta.url));
   const logAgentPath = fileURLToPath(new URL("../scripts/mock-agent-log.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-multiverifier-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-multiverifier-"));
 
   const initRes = await runCli({
     binPath,

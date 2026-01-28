@@ -1,4 +1,4 @@
-# Choreo Node Inputs + Escalation Promotion Implementation Plan
+# Dagain Node Inputs + Escalation Promotion Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task.
 
@@ -35,13 +35,13 @@
 **Step 1: Write the failing test**
 
 Create `test/auto-kv-envelope.test.js`:
-- Create a tmp choreo project via `choreo init --no-refine`.
+- Create a tmp dagain project via `dagain init --no-refine`.
 - Configure runner `mock` that outputs `<result>` with `status:"fail"` and `summary:"boom"`.
-- Run `choreo run --max-iterations 1 --interval-ms 0 --no-live --no-color`.
+- Run `dagain run --max-iterations 1 --interval-ms 0 --no-live --no-color`.
 - Query sqlite `kv_latest` for node `plan-000` and assert keys exist:
   - `out.summary` == `"boom"`
-  - `out.last_stdout_path` points at `.choreo/runs/<run>/stdout.log`
-  - `out.last_result_path` points at `.choreo/runs/<run>/result.json`
+  - `out.last_stdout_path` points at `.dagain/runs/<run>/stdout.log`
+  - `out.last_result_path` points at `.dagain/runs/<run>/result.json`
   - `err.summary` == `"boom"`
 
 Run: `npm test -- test/auto-kv-envelope.test.js`  
@@ -70,12 +70,12 @@ Expected: PASS
 **Step 1: Write the failing test**
 
 Create `test/packet-node-inputs.test.js`:
-- Create tmp choreo project via `choreo init --no-refine`.
+- Create tmp dagain project via `dagain init --no-refine`.
 - Pre-populate DB:
   - `kvPut(__run__:ctx.foo="bar")`
   - `UPDATE nodes SET inputs_json='[{\"nodeId\":\"__run__\",\"key\":\"ctx.foo\",\"as\":\"foo\"}]' WHERE id='plan-000'`
 - Configure runner to `scripts/mock-agent-packet-dump.js` so it writes `packet_seen.md`.
-- Run `choreo run --max-iterations 1 --interval-ms 0 --no-live --no-color`.
+- Run `dagain run --max-iterations 1 --interval-ms 0 --no-live --no-color`.
 - Assert `packet_seen.md` contains a Node Inputs section with `__run__:ctx.foo` (and includes `bar` preview if inlining is enabled).
 
 Run: `npm test -- test/packet-node-inputs.test.js`  

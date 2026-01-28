@@ -30,10 +30,10 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("run: auto-writes KV envelope keys for each node run", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-auto-kv-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-auto-kv-"));
   const initRes = await runCli({
     binPath,
     cwd: tmpDir,
@@ -99,9 +99,9 @@ test("run: auto-writes KV envelope keys for each node run", async () => {
   const rows = await sqliteJson(
     dbPath,
     "SELECT key, value_text, run_id FROM kv_latest\n" +
-      "WHERE node_id='plan-000'\n" +
-      "  AND key IN ('out.summary','out.last_stdout_path','out.last_result_path','err.summary')\n" +
-      "ORDER BY key;\n",
+    "WHERE node_id='plan-000'\n" +
+    "  AND key IN ('out.summary','out.last_stdout_path','out.last_result_path','err.summary')\n" +
+    "ORDER BY key;\n",
   );
   const byKey = new Map(rows.map((row) => [row.key, row]));
 

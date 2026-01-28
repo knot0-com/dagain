@@ -44,9 +44,9 @@ function runCliInteractive({ binPath, cwd, args, input }) {
 }
 
 test("chat: /pause enqueues a control command", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-chat-controls-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-chat-controls-"));
 
   const initRes = await runCli({
     binPath,
@@ -66,9 +66,9 @@ test("chat: /pause enqueues a control command", async () => {
 });
 
 test("chat: natural language 'pause launching' works without LLM", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-chat-controls-nl-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-chat-controls-nl-"));
 
   const initRes = await runCli({
     binPath,

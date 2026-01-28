@@ -42,8 +42,8 @@ function runScript({ scriptPath, cwd, env }) {
 }
 
 async function createDbWithNode({ dbPath, nodeId, verify }) {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const schemaPath = path.join(choreoRoot, "src", "lib", "db", "schema.sql");
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const schemaPath = path.join(repoRoot, "src", "lib", "db", "schema.sql");
   const schemaSql = await readFile(schemaPath, "utf8");
   await sqliteExec(dbPath, schemaSql);
 
@@ -65,9 +65,9 @@ async function createDbWithNode({ dbPath, nodeId, verify }) {
 }
 
 test("shell-verifier: success when all commands pass", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const scriptPath = path.join(choreoRoot, "scripts", "shell-verifier.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-shell-verifier-ok-"));
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const scriptPath = path.join(repoRoot, "scripts", "shell-verifier.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-shell-verifier-ok-"));
   const dbPath = path.join(tmpDir, "state.sqlite");
   const nodeId = "verify-ok";
 
@@ -81,8 +81,8 @@ test("shell-verifier: success when all commands pass", async () => {
     scriptPath,
     cwd: tmpDir,
     env: {
-      CHOREO_DB: dbPath,
-      CHOREO_NODE_ID: nodeId,
+      DAGAIN_DB: dbPath,
+      DAGAIN_NODE_ID: nodeId,
     },
   });
 
@@ -93,9 +93,9 @@ test("shell-verifier: success when all commands pass", async () => {
 });
 
 test("shell-verifier: fail when a command fails", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const scriptPath = path.join(choreoRoot, "scripts", "shell-verifier.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-shell-verifier-fail-"));
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const scriptPath = path.join(repoRoot, "scripts", "shell-verifier.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-shell-verifier-fail-"));
   const dbPath = path.join(tmpDir, "state.sqlite");
   const nodeId = "verify-fail";
 
@@ -110,8 +110,8 @@ test("shell-verifier: fail when a command fails", async () => {
     scriptPath,
     cwd: tmpDir,
     env: {
-      CHOREO_DB: dbPath,
-      CHOREO_NODE_ID: nodeId,
+      DAGAIN_DB: dbPath,
+      DAGAIN_NODE_ID: nodeId,
     },
   });
 
@@ -122,4 +122,3 @@ test("shell-verifier: fail when a command fails", async () => {
   const errors = Array.isArray(parsed.errors) ? parsed.errors.join("\n") : "";
   assert.match(errors, /process\.exit\(1\)/);
 });
-

@@ -31,11 +31,11 @@ function runCli({ binPath, cwd, args, env }) {
 }
 
 test("workers: write/write ownership conflict serializes executors", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
   const mockAgentPath = fileURLToPath(new URL("../scripts/mock-sleep-agent.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-workers-lock-write-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-workers-lock-write-"));
 
   const initRes = await runCli({
     binPath,
@@ -102,11 +102,11 @@ test("workers: write/write ownership conflict serializes executors", async () =>
 });
 
 test("workers: read/read ownership allows parallel verifiers", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
   const mockAgentPath = fileURLToPath(new URL("../scripts/mock-sleep-agent.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-workers-lock-read-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-workers-lock-read-"));
 
   const initRes = await runCli({
     binPath,
@@ -181,4 +181,3 @@ test("workers: read/read ownership allows parallel verifiers", async () => {
   assert.ok(exit1 !== -1, "expected exit verify-1");
   assert.ok(spawn2 < exit1, "expected verify-2 spawn before verify-1 exit (parallel)");
 });
-

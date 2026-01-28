@@ -1,10 +1,10 @@
-# Choreo SQLite Workgraph Implementation Plan
+# Dagain SQLite Workgraph Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task.
 
-**Goal:** Replace `.choreo/workgraph.json` as the source of truth with a SQLite-backed workgraph, while still exporting a read-only `.choreo/workgraph.json` snapshot for human readability.
+**Goal:** Replace `.dagain/workgraph.json` as the source of truth with a SQLite-backed workgraph, while still exporting a read-only `.dagain/workgraph.json` snapshot for human readability.
 
-**Architecture:** Treat `.choreo/state.sqlite` as the canonical state store for nodes, deps, locks, and node-scoped KV (“env variables”) keyed by `(node_id, key)`. Keep SQLite writes small by storing large payloads as files under `.choreo/artifacts/` and saving pointers/hashes in SQLite. Export `.choreo/workgraph.json` after every state mutation for UX/debugging.
+**Architecture:** Treat `.dagain/state.sqlite` as the canonical state store for nodes, deps, locks, and node-scoped KV (“env variables”) keyed by `(node_id, key)`. Keep SQLite writes small by storing large payloads as files under `.dagain/artifacts/` and saving pointers/hashes in SQLite. Export `.dagain/workgraph.json` after every state mutation for UX/debugging.
 
 **Tech Stack:** Node.js `>=18`, `sqlite3` CLI on `PATH`, existing `node:test` suite, existing runner model (Codex/Claude/Gemini) unchanged.
 
@@ -12,13 +12,13 @@
 
 ## Scope / Non-goals
 
-- In scope: DB-backed graph state, DB-backed locking semantics, export JSON snapshot for readability, **agent↔DB interaction contract** (how nodes are created/spawned + how node context is loaded), `(node_id,key)` KV with history retention (last 5), **parent escalation on permanent failure**, **in-node microcalls via `choreo microcall`**, update tests + docs.
+- In scope: DB-backed graph state, DB-backed locking semantics, export JSON snapshot for readability, **agent↔DB interaction contract** (how nodes are created/spawned + how node context is loaded), `(node_id,key)` KV with history retention (last 5), **parent escalation on permanent failure**, **in-node microcalls via `dagain microcall`**, update tests + docs.
 - Out of scope (for this plan): true parallel supervisor/workers, worktrees, importing legacy `workgraph.json` state, cross-node full-text search, advanced microcall budgets/caching.
 
 ## Breaking changes
 
-- Existing `.choreo/workgraph.json` will no longer be read as authoritative state. It becomes a derived snapshot.
-- `sqlite3` becomes a runtime dependency for `choreo` (not just spawned agents).
+- Existing `.dagain/workgraph.json` will no longer be read as authoritative state. It becomes a derived snapshot.
+- `sqlite3` becomes a runtime dependency for `dagain` (not just spawned agents).
 
 ---
 
@@ -118,11 +118,11 @@ CREATE INDEX IF NOT EXISTS idx_kv_history_node_key ON kv_history(node_id, key, i
 
 ### 1) Who controls the workgraph?
 
-- **Choreo is the only writer** for graph control-plane tables: `nodes`, `deps`, lock fields, and node `status`.
+- **Dagain is the only writer** for graph control-plane tables: `nodes`, `deps`, lock fields, and node `status`.
 - A runner/agent does **not** directly mutate graph state via `sqlite3`. Instead, it proposes graph changes via its normal `<result>...</result>` output:
   - `result.status` sets the current node outcome (`success`, `checkpoint`, `fail`).
   - `result.next.addNodes[]` is how an agent **generates new work** (recursive decomposition).
-  - Choreo receives the result, validates it, and persists it into SQLite (and exports the JSON snapshot).
+  - Dagain receives the result, validates it, and persists it into SQLite (and exports the JSON snapshot).
 
 This keeps scheduling/locking deterministic and runner-agnostic.
 
@@ -136,25 +136,25 @@ This keeps scheduling/locking deterministic and runner-agnostic.
   4) spawns the runner command in the repo root,
   5) parses `<result>`,
   6) applies state changes (node done/checkpoint/fail + inserts new nodes/deps),
-  7) exports `.choreo/workgraph.json` snapshot.
+  7) exports `.dagain/workgraph.json` snapshot.
 
 ### 3) How node context is fed to sub agents
 
 There are two complementary mechanisms (use both):
 
-- **(A) Environment pointers (always available):** choreo injects env vars into the runner process so the agent can load exactly what it needs on-demand:
-  - `CHOREO_DB=.choreo/state.sqlite`
-  - `CHOREO_NODE_ID=<current node id>`
-  - `CHOREO_RUN_ID=<current run id>`
-  - `CHOREO_PARENT_NODE_ID=<parent id or empty>`
-  - `CHOREO_ARTIFACTS_DIR=.choreo/artifacts`
-  - `CHOREO_CHECKPOINTS_DIR=.choreo/checkpoints`
-  - `CHOREO_RUNS_DIR=.choreo/runs`
-  - `CHOREO_BIN=bin/choreo.js` (executable; optional helper commands)
+- **(A) Environment pointers (always available):** dagain injects env vars into the runner process so the agent can load exactly what it needs on-demand:
+  - `DAGAIN_DB=.dagain/state.sqlite`
+  - `DAGAIN_NODE_ID=<current node id>`
+  - `DAGAIN_RUN_ID=<current run id>`
+  - `DAGAIN_PARENT_NODE_ID=<parent id or empty>`
+  - `DAGAIN_ARTIFACTS_DIR=.dagain/artifacts`
+  - `DAGAIN_CHECKPOINTS_DIR=.dagain/checkpoints`
+  - `DAGAIN_RUNS_DIR=.dagain/runs`
+  - `DAGAIN_BIN=bin/dagain.js` (executable; optional helper commands)
 
-- **(B) Explicit node inputs (small “context refs”):** each node can declare `inputs_json` (a list of refs) that choreo renders into the packet for convenience:
+- **(B) Explicit node inputs (small “context refs”):** each node can declare `inputs_json` (a list of refs) that dagain renders into the packet for convenience:
   - Each input is `{ "nodeId": "task-123", "key": "out.summary", "as": "priorSummary" }` (the `as` field is optional).
-  - Choreo should render inputs as **refs** by default (node+key), and may inline small `value_text` (e.g. ≤2KB) but must avoid bloating packets.
+  - Dagain should render inputs as **refs** by default (node+key), and may inline small `value_text` (e.g. ≤2KB) but must avoid bloating packets.
 
 **Key point:** context stays in the environment (SQLite + artifacts), and sub agents load it dynamically.
 
@@ -163,29 +163,29 @@ There are two complementary mechanisms (use both):
 - Agents write “sub-context” into `kv_latest/kv_history` (not into `nodes`).
 - Retrieval is key-based, cross-node: `(node_id, key)` lookups.
 - Retention: keep only the last **5** history rows per `(node_id, key)` (plus `kv_latest` as the current view).
-- Add a **run-scoped namespace** by reserving a sentinel `node_id="__run__"`. This is shared memory across nodes for the current choreo session.
-  - Agents may write to their own node (`$CHOREO_NODE_ID`) and to `__run__`.
+- Add a **run-scoped namespace** by reserving a sentinel `node_id="__run__"`. This is shared memory across nodes for the current dagain session.
+  - Agents may write to their own node (`$DAGAIN_NODE_ID`) and to `__run__`.
   - Agents may read any node (including `__run__`).
 
 Concrete `sqlite3` examples (parameterized to avoid quoting bugs):
 
 ```bash
 # Read a key from the current node:
-sqlite3 -json "$CHOREO_DB" \\
+sqlite3 -json "$DAGAIN_DB" \\
   -cmd ".parameter init" \\
-  -cmd ".parameter set :n '$CHOREO_NODE_ID'" \\
+  -cmd ".parameter set :n '$DAGAIN_NODE_ID'" \\
   -cmd ".parameter set :k 'out.summary'" \\
   "SELECT value_text, artifact_path, artifact_sha256, updated_at FROM kv_latest WHERE node_id=:n AND key=:k;"
 
 # Read a key from parent:
-sqlite3 -json "$CHOREO_DB" \\
+sqlite3 -json "$DAGAIN_DB" \\
   -cmd ".parameter init" \\
-  -cmd ".parameter set :n '$CHOREO_PARENT_NODE_ID'" \\
+  -cmd ".parameter set :n '$DAGAIN_PARENT_NODE_ID'" \\
   -cmd ".parameter set :k 'ctx.decision'" \\
   "SELECT value_text, artifact_path FROM kv_latest WHERE node_id=:n AND key=:k;"
 
 # Read a shared run-scoped key:
-sqlite3 -json "$CHOREO_DB" \\
+sqlite3 -json "$DAGAIN_DB" \\
   -cmd ".parameter init" \\
   -cmd ".parameter set :n '__run__'" \\
   -cmd ".parameter set :k 'ctx.repo_overview'" \\
@@ -196,7 +196,7 @@ sqlite3 -json "$CHOREO_DB" \\
 
 ## Permanent failure “promotion” to parent (escalation node)
 
-When a node reaches max retries and becomes `status='failed'`, choreo should automatically “promote” it to a higher-level agent by creating an **escalation node**:
+When a node reaches max retries and becomes `status='failed'`, dagain should automatically “promote” it to a higher-level agent by creating an **escalation node**:
 
 - New node:
   - `id`: `plan-escalate-<failedNodeId>` (or another deterministic scheme)
@@ -217,7 +217,7 @@ This is how “sub node → higher-level agent context” happens without needin
 
 ## System Prompt / Template Design (stock runners, DB-first context)
 
-Choreo’s “system prompt” is effectively the role packet template (`templates/*.md`). The goal is to make DB usage and recursive graph decomposition the default behavior for stock coding agents.
+Dagain’s “system prompt” is effectively the role packet template (`templates/*.md`). The goal is to make DB usage and recursive graph decomposition the default behavior for stock coding agents.
 
 ### Shared snippet (add to every role template)
 
@@ -227,17 +227,17 @@ Add this section (or equivalent) to `templates/planner.md`, `templates/executor.
 ## DB-First Context (REQUIRED)
 
 You have access to a SQLite state DB and an artifacts directory:
-- DB: `$CHOREO_DB`
-- Node: `$CHOREO_NODE_ID`
-- Parent node (may be empty): `$CHOREO_PARENT_NODE_ID`
-- Run: `$CHOREO_RUN_ID`
-- Artifacts dir: `$CHOREO_ARTIFACTS_DIR`
+- DB: `$DAGAIN_DB`
+- Node: `$DAGAIN_NODE_ID`
+- Parent node (may be empty): `$DAGAIN_PARENT_NODE_ID`
+- Run: `$DAGAIN_RUN_ID`
+- Artifacts dir: `$DAGAIN_ARTIFACTS_DIR`
 
 Rules:
-- Do not write to `nodes` / `deps` tables. Only Choreo mutates the workgraph.
+- Do not write to `nodes` / `deps` tables. Only Dagain mutates the workgraph.
 - Use the DB only for *node context*: read other nodes via `(node_id,key)` lookups and write your own keys.
-- If something is large (logs, long snippets, analyses), write it to `$CHOREO_ARTIFACTS_DIR` as a file and store only a pointer in the DB.
-- Prefer `choreo kv ...` helper commands when available; otherwise use `sqlite3 "$CHOREO_DB" ...`.
+- If something is large (logs, long snippets, analyses), write it to `$DAGAIN_ARTIFACTS_DIR` as a file and store only a pointer in the DB.
+- Prefer `dagain kv ...` helper commands when available; otherwise use `sqlite3 "$DAGAIN_DB" ...`.
 ```
 
 ### Planner prompt rules (recursive graph mechanism)
@@ -258,7 +258,7 @@ Add this to `templates/planner.md`:
 ## Recursion (How to Spawn Subagents)
 
 To spawn follow-up agents, add nodes in your `<result>.next.addNodes`.
-Choreo will persist them to the workgraph and execute them as fresh agents.
+Dagain will persist them to the workgraph and execute them as fresh agents.
 
 When you add nodes, include small `inputs` refs that point to DB keys (nodeId+key) instead of pasting large context.
 ```
@@ -288,16 +288,16 @@ If failing or checkpointing, also write:
 - `err.repro`
 ```
 
-### Direct SQLite vs `choreo kv` wrapper (recommended posture)
+### Direct SQLite vs `dagain kv` wrapper (recommended posture)
 
-- Reads: allow raw `sqlite3 -json "$CHOREO_DB" "SELECT ..."` for ad-hoc debugging.
-- Writes: strongly prefer `choreo kv put` so we can enforce “only write your own node” and centralize retention/artifact pointer logic.
+- Reads: allow raw `sqlite3 -json "$DAGAIN_DB" "SELECT ..."` for ad-hoc debugging.
+- Writes: strongly prefer `dagain kv put` so we can enforce “only write your own node” and centralize retention/artifact pointer logic.
 
 ### Enforcing DB-first behavior (“required keys”)
 
 Use **strict** enforcement, but make it cheap and reliable:
 
-- Choreo auto-populates the following keys from the runner execution context and `<result>` payload (agents do not need to write these manually):
+- Dagain auto-populates the following keys from the runner execution context and `<result>` payload (agents do not need to write these manually):
   - `out.summary` (from `result.summary`)
   - `out.last_stdout_path` (from the run log path)
   - `out.last_result_path` (from the parsed `result.json` path)
@@ -309,9 +309,9 @@ If writing shared/global keys, use `node_id="__run__"` and prefix keys with `ctx
 
 ---
 
-## Hidden in-node microcalls (`choreo microcall`)
+## Hidden in-node microcalls (`dagain microcall`)
 
-“Recursive graph nodes” are Choreo’s **control-plane recursion** (visible work items in the DB). “Microcalls” are **in-node recursion** (hidden helpers inside a single node run).
+“Recursive graph nodes” are Dagain’s **control-plane recursion** (visible work items in the DB). “Microcalls” are **in-node recursion** (hidden helpers inside a single node run).
 
 Use **microcalls** when the output is small and you want to keep the main agent fresh:
 - Summarize/transform context into a tight JSON blob
@@ -323,16 +323,16 @@ Use **graph nodes** (`next.addNodes`) when the work:
 - Benefits from retries + escalation semantics
 - Needs ownership/deps to avoid conflicts
 
-### `choreo microcall` CLI contract (MVP)
+### `dagain microcall` CLI contract (MVP)
 
-- The agent runs: `choreo microcall --prompt "..." [--runner <name> | --role researcher] [--store-key ctx.foo] [--run]`
-- Choreo:
+- The agent runs: `dagain microcall --prompt "..." [--runner <name> | --role researcher] [--store-key ctx.foo] [--run]`
+- Dagain:
   - renders `templates/microcall.md`
   - runs the chosen runner (same mechanism as nodes: `runRunnerCommand`)
   - extracts JSON from stdout (`<result>...</result>` / ```json fences / raw JSON)
   - writes artifacts under:
-    - preferred: `.choreo/runs/$CHOREO_RUN_ID/microcalls/<microId>/`
-    - fallback: `.choreo/microcalls/<microId>/`
+    - preferred: `.dagain/runs/$DAGAIN_RUN_ID/microcalls/<microId>/`
+    - fallback: `.dagain/microcalls/<microId>/`
   - prints the extracted JSON to stdout (so the parent agent can use it immediately)
   - optionally persists the JSON into KV (see below)
 
@@ -356,11 +356,11 @@ Suggested schema:
 ### Storing microcall results in the DB (recommended)
 
 If `--store-key <k>` is provided:
-- default store target is the current node (`$CHOREO_NODE_ID`)
+- default store target is the current node (`$DAGAIN_NODE_ID`)
 - `--run` stores into the shared run namespace (`node_id="__run__"`)
 - the stored value should be the **full JSON string** of the microcall result (so downstream reads can re-parse)
 
-This keeps the parent agent fresh while still allowing downstream nodes to “rehydrate” the microcall outcome via `choreo kv get`.
+This keeps the parent agent fresh while still allowing downstream nodes to “rehydrate” the microcall outcome via `dagain kv get`.
 
 ---
 
@@ -377,8 +377,8 @@ This keeps the parent agent fresh while still allowing downstream nodes to “re
 **Step 1: Write failing test for DB creation**
 
 Create `test/db-init.test.js` that:
-- Runs `node bin/choreo.js init --goal "X" --no-refine --force --no-color` in a tmp dir.
-- Asserts `.choreo/state.sqlite` exists.
+- Runs `node bin/dagain.js init --goal "X" --no-refine --force --no-color` in a tmp dir.
+- Asserts `.dagain/state.sqlite` exists.
 - Asserts `nodes` contains `plan-000`.
 
 Use helper `test/helpers/sqlite.js`:
@@ -413,13 +413,13 @@ Create `src/lib/db/sqlite3.js` that can:
 - `exec(dbPath, sql)` (for schema)
 - `queryJson(dbPath, sql)` (uses `sqlite3 -json`)
 
-Update `src/lib/config.js` `choreoPaths()` to include:
-- `dbPath: path.join(choreoDir, "state.sqlite")`
-- `graphSnapshotPath: path.join(choreoDir, "workgraph.json")` (export-only)
-- `artifactsDir: path.join(choreoDir, "artifacts")`
+Update `src/lib/config.js` `dagainPaths()` to include:
+- `dbPath: path.join(dagainDir, "state.sqlite")`
+- `graphSnapshotPath: path.join(dagainDir, "workgraph.json")` (export-only)
+- `artifactsDir: path.join(dagainDir, "artifacts")`
 
 Update `initCommand` in `src/cli.js` to:
-- Ensure `.choreo/artifacts/`
+- Ensure `.dagain/artifacts/`
 - Create DB and apply `schema.sql`
 - Insert `plan-000` node + timestamps (no JSON workgraph generation)
 
@@ -432,7 +432,7 @@ Expected: PASS.
 
 ```bash
 git add src/lib/db/schema.sql src/lib/db/sqlite3.js src/lib/config.js src/cli.js test/db-init.test.js test/helpers/sqlite.js
-git commit -m "feat(choreo): add sqlite state db scaffold"
+git commit -m "feat(dagain): add sqlite state db scaffold"
 ```
 
 ---
@@ -441,15 +441,15 @@ git commit -m "feat(choreo): add sqlite state db scaffold"
 
 **Files:**
 - Modify: `src/cli.js`
-- Modify: `templates/*.md` (built-ins) AND `.choreo/templates/*.md` (copied templates, if used)
+- Modify: `templates/*.md` (built-ins) AND `.dagain/templates/*.md` (copied templates, if used)
 - Create: `test/packet-db-pointers.test.js`
 
 **Step 1: Write failing test**
 
 Create `test/packet-db-pointers.test.js` that:
-- Creates a tmp choreo project, runs `choreo init`.
-- Forces a single node execution using a mock runner that prints `$CHOREO_DB` and `$CHOREO_NODE_ID`.
-- Asserts the runner process received those env vars (e.g., check `.choreo/runs/<run>/stdout.log` contains the DB path).
+- Creates a tmp dagain project, runs `dagain init`.
+- Forces a single node execution using a mock runner that prints `$DAGAIN_DB` and `$DAGAIN_NODE_ID`.
+- Asserts the runner process received those env vars (e.g., check `.dagain/runs/<run>/stdout.log` contains the DB path).
 
 Run: `node --test test/packet-db-pointers.test.js`  
 Expected: FAIL.
@@ -457,12 +457,12 @@ Expected: FAIL.
 **Step 2: Inject env vars into runner spawn**
 
 In `executeNode()` (and goal-refine if desired), add runner env:
-- `CHOREO_DB` (absolute path)
-- `CHOREO_NODE_ID`
-- `CHOREO_RUN_ID`
-- `CHOREO_PARENT_NODE_ID` (query parent_id from DB; empty if none)
-- `CHOREO_ARTIFACTS_DIR` (absolute path)
-- `CHOREO_BIN` (absolute path to `bin/choreo.js`)
+- `DAGAIN_DB` (absolute path)
+- `DAGAIN_NODE_ID`
+- `DAGAIN_RUN_ID`
+- `DAGAIN_PARENT_NODE_ID` (query parent_id from DB; empty if none)
+- `DAGAIN_ARTIFACTS_DIR` (absolute path)
+- `DAGAIN_BIN` (absolute path to `bin/dagain.js`)
 
 **Step 3: Render node inputs into packet**
 
@@ -478,13 +478,13 @@ Expected: PASS.
 **Step 5: Commit**
 
 ```bash
-git add src/cli.js templates .choreo/templates test/packet-db-pointers.test.js
-git commit -m "feat(choreo): inject db pointers + node inputs into packets"
+git add src/cli.js templates .dagain/templates test/packet-db-pointers.test.js
+git commit -m "feat(dagain): inject db pointers + node inputs into packets"
 ```
 
 ---
 
-## Task 3: Export `.choreo/workgraph.json` snapshot from DB (UX-only)
+## Task 3: Export `.dagain/workgraph.json` snapshot from DB (UX-only)
 
 **Files:**
 - Create: `src/lib/db/export.js`
@@ -494,8 +494,8 @@ git commit -m "feat(choreo): inject db pointers + node inputs into packets"
 **Step 1: Write failing test**
 
 Create `test/workgraph-snapshot.test.js`:
-- Run `choreo init ...`
-- Assert `.choreo/workgraph.json` exists and includes `nodes[0].id === "plan-000"`.
+- Run `dagain init ...`
+- Assert `.dagain/workgraph.json` exists and includes `nodes[0].id === "plan-000"`.
 
 Run: `node --test test/workgraph-snapshot.test.js`  
 Expected: FAIL.
@@ -520,7 +520,7 @@ Expected: PASS.
 
 ```bash
 git add src/lib/db/export.js src/cli.js test/workgraph-snapshot.test.js
-git commit -m "feat(choreo): export workgraph.json snapshot from sqlite"
+git commit -m "feat(dagain): export workgraph.json snapshot from sqlite"
 ```
 
 ---
@@ -567,7 +567,7 @@ Expected: PASS.
 
 ```bash
 git add src/lib/db/nodes.js src/cli.js test/select-sql.test.js
-git commit -m "refactor(choreo): SQL-backed node selection"
+git commit -m "refactor(dagain): SQL-backed node selection"
 ```
 
 ---
@@ -622,7 +622,7 @@ Expected: PASS.
 
 ```bash
 git add src/lib/db/nodes.js src/cli.js test/claim-node.test.js
-git commit -m "feat(choreo): atomic claim + applyResult in sqlite"
+git commit -m "feat(dagain): atomic claim + applyResult in sqlite"
 ```
 
 ---
@@ -637,7 +637,7 @@ git commit -m "feat(choreo): atomic claim + applyResult in sqlite"
 
 Create `test/answer-db.test.js` that:
 - Creates DB with one node `needs_human` and a checkpoint file
-- Runs `node bin/choreo.js answer --node=... --answer="..." --no-prompt`
+- Runs `node bin/dagain.js answer --node=... --answer="..." --no-prompt`
 - Asserts node status becomes `open` and `checkpoint_json` includes the answer
 
 Run: `node --test test/answer-db.test.js`  
@@ -659,7 +659,7 @@ Expected: PASS.
 
 ```bash
 git add src/cli.js test/answer-db.test.js
-git commit -m "refactor(choreo): answer uses sqlite state"
+git commit -m "refactor(dagain): answer uses sqlite state"
 ```
 
 ---
@@ -699,7 +699,7 @@ Expected: PASS.
 
 ```bash
 git add src/cli.js test/planner-scaffold-db.test.js
-git commit -m "refactor(choreo): planner scaffolding via sqlite"
+git commit -m "refactor(dagain): planner scaffolding via sqlite"
 ```
 
 ---
@@ -709,7 +709,7 @@ git commit -m "refactor(choreo): planner scaffolding via sqlite"
 **Files:**
 - Create: `src/lib/db/kv.js`
 - Modify: `src/cli.js` (env injection only)
-- Create: `bin/choreo-kv.js` (optional CLI wrapper) OR add subcommands to `bin/choreo.js`
+- Create: `bin/dagain-kv.js` (optional CLI wrapper) OR add subcommands to `bin/dagain.js`
 - Test: `test/kv-retention.test.js`
 
 **Step 1: Write failing test**
@@ -733,32 +733,32 @@ In `src/lib/db/kv.js`, implement:
 
 **Step 2b: Provide an agent-friendly CLI**
 
-Add a `choreo kv` subcommand (preferred over raw SQL in prompts):
-- `choreo kv get --node <id> --key <k> [--json]`
-- `choreo kv put --node <id> --key <k> --value <text>`
-- `choreo kv ls --node <id> [--prefix ctx.]`
+Add a `dagain kv` subcommand (preferred over raw SQL in prompts):
+- `dagain kv get --node <id> --key <k> [--json]`
+- `dagain kv put --node <id> --key <k> --value <text>`
+- `dagain kv ls --node <id> [--prefix ctx.]`
 - Run-scoped helpers (write/read shared `__run__` keys):
-  - `choreo kv get --run --key <k> [--json]`
-  - `choreo kv put --run --key <k> --value <text>`
-  - `choreo kv ls --run [--prefix ctx.]`
+  - `dagain kv get --run --key <k> [--json]`
+  - `dagain kv put --run --key <k> --value <text>`
+  - `dagain kv ls --run [--prefix ctx.]`
 
 Make sure these subcommands:
 - do not take the supervisor lock,
 - are safe to call from inside node execution,
-- use `CHOREO_DB`/`CHOREO_NODE_ID` defaults when flags omitted,
+- use `DAGAIN_DB`/`DAGAIN_NODE_ID` defaults when flags omitted,
 - **restrict writes**:
-  - allow writing only to `$CHOREO_NODE_ID` or `__run__` by default
+  - allow writing only to `$DAGAIN_NODE_ID` or `__run__` by default
   - require `--allow-cross-node-write` for any other `--node <id>` (intended for humans, not agents)
 
-Update templates to include a short “KV cheat sheet” using `choreo kv ...`.
+Update templates to include a short “KV cheat sheet” using `dagain kv ...`.
 
 **Step 3: Wire runner env**
 
 When spawning agents in `executeNode`, set:
-- `CHOREO_DB=.choreo/state.sqlite`
-- `CHOREO_NODE_ID=<node.id>`
-- `CHOREO_RUN_ID=<run>`
-- `CHOREO_ARTIFACTS_DIR=.choreo/artifacts`
+- `DAGAIN_DB=.dagain/state.sqlite`
+- `DAGAIN_NODE_ID=<node.id>`
+- `DAGAIN_RUN_ID=<run>`
+- `DAGAIN_ARTIFACTS_DIR=.dagain/artifacts`
 
 (Use these later in templates; no microcalls required.)
 
@@ -771,7 +771,7 @@ Expected: PASS.
 
 ```bash
 git add src/lib/db/kv.js src/cli.js test/kv-retention.test.js
-git commit -m "feat(choreo): node-scoped kv with retention"
+git commit -m "feat(dagain): node-scoped kv with retention"
 ```
 
 ---
@@ -781,20 +781,20 @@ git commit -m "feat(choreo): node-scoped kv with retention"
 **Files:**
 - Modify: `test/e2e.test.js`
 - Modify: `test/deadlock-auto-reset.test.js`
-- Modify: any other tests that directly edit `.choreo/workgraph.json`
+- Modify: any other tests that directly edit `.dagain/workgraph.json`
 
 **Step 1: Make e2e test assert on snapshot + DB**
 
 Update `test/e2e.test.js` to assert:
-- `.choreo/state.sqlite` exists
-- `.choreo/workgraph.json` snapshot exists and shows nodes `done`
+- `.dagain/state.sqlite` exists
+- `.dagain/workgraph.json` snapshot exists and shows nodes `done`
 
 Run: `node --test test/e2e.test.js`  
 Expected: PASS.
 
 **Step 2: Rewrite deadlock test to manipulate DB**
 
-Instead of writing `.choreo/workgraph.json`, use `sqlite3` to set up `nodes/deps` into the DB, then run `choreo run --dry-run` and assert the reset behavior via DB or snapshot.
+Instead of writing `.dagain/workgraph.json`, use `sqlite3` to set up `nodes/deps` into the DB, then run `dagain run --dry-run` and assert the reset behavior via DB or snapshot.
 
 Run: `node --test test/deadlock-auto-reset.test.js`  
 Expected: PASS.
@@ -803,7 +803,7 @@ Expected: PASS.
 
 ```bash
 git add test/e2e.test.js test/deadlock-auto-reset.test.js
-git commit -m "test(choreo): update tests for sqlite-backed state"
+git commit -m "test(dagain): update tests for sqlite-backed state"
 ```
 
 ---
@@ -818,9 +818,9 @@ git commit -m "test(choreo): update tests for sqlite-backed state"
 **Step 1: Update README state section**
 
 Document:
-- `.choreo/state.sqlite` is canonical
-- `.choreo/workgraph.json` is exported snapshot
-- `.choreo/artifacts/` for large context payloads
+- `.dagain/state.sqlite` is canonical
+- `.dagain/workgraph.json` is exported snapshot
+- `.dagain/artifacts/` for large context payloads
 
 **Step 2: Remove dead code**
 
@@ -835,12 +835,12 @@ Expected: PASS.
 
 ```bash
 git add README.md src/lib/config.js src/lib/workgraph.js src/lib/select.js
-git commit -m "docs(choreo): document sqlite state + remove json graph internals"
+git commit -m "docs(dagain): document sqlite state + remove json graph internals"
 ```
 
 ---
 
-## Task 11: Add `choreo microcall` (in-node helper calls)
+## Task 11: Add `dagain microcall` (in-node helper calls)
 
 **Files:**
 - Create: `templates/microcall.md`
@@ -850,8 +850,8 @@ git commit -m "docs(choreo): document sqlite state + remove json graph internals
 **Step 1: Write failing test**
 
 Create `test/microcall.test.js` that:
-- sets up a tmp choreo project with a config runner like `node scripts/mock-agent-log.js microcall {packet}`
-- runs `node bin/choreo.js microcall --prompt "hello" --runner mock --json`
+- sets up a tmp dagain project with a config runner like `node scripts/mock-agent-log.js microcall {packet}`
+- runs `node bin/dagain.js microcall --prompt "hello" --runner mock --json`
 - asserts stdout is valid JSON and includes `status: "success"`
 
 Run: `node --test test/microcall.test.js`  
@@ -872,11 +872,11 @@ In `src/cli.js`:
 - pick runner:
   - `--runner` wins
   - else `--role` picks from config (default `researcher`)
-- create run dir under `.choreo/runs/$CHOREO_RUN_ID/microcalls/<microId>` when env is present, otherwise `.choreo/microcalls/<microId>`
+- create run dir under `.dagain/runs/$DAGAIN_RUN_ID/microcalls/<microId>` when env is present, otherwise `.dagain/microcalls/<microId>`
 - render `templates/microcall.md` into `packet.md`
 - run runner with `runRunnerCommand`
 - read `stdout.log`, extract JSON with `extractResultJson`, write `result.json`, and print JSON to stdout
-- if `--store-key` is provided and `CHOREO_DB` exists, call KV write logic (Task 8) to store the JSON under:
+- if `--store-key` is provided and `DAGAIN_DB` exists, call KV write logic (Task 8) to store the JSON under:
   - current node by default
   - `__run__` when `--run` is used
 
@@ -889,14 +889,14 @@ Expected: PASS.
 
 ```bash
 git add templates/microcall.md src/cli.js test/microcall.test.js
-git commit -m "feat(choreo): add microcall helper command"
+git commit -m "feat(dagain): add microcall helper command"
 ```
 
 ---
 
 ## Execution handoff
 
-Plan complete and saved to `docs/plans/2026-01-20-choreo-sqlite-workgraph.md`. Two execution options:
+Plan complete and saved to `docs/plans/2026-01-20-dagain-sqlite-workgraph.md`. Two execution options:
 
 1. **Subagent-Driven (this session)** — use `superpowers:subagent-driven-development` and implement task-by-task with review checkpoints.
 2. **Parallel Session (separate)** — open a new session in an isolated worktree and use `superpowers:executing-plans` to execute with checkpoints.

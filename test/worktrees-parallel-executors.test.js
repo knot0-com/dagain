@@ -47,18 +47,18 @@ function runShellCommand(cmd, { cwd }) {
 }
 
 test("worktrees: mode=always runs conflicting executors in parallel and merges serially", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
   const mockAgentPath = fileURLToPath(new URL("../scripts/mock-sleep-agent.js", import.meta.url));
   const shellMergePath = fileURLToPath(new URL("../scripts/shell-merge.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-worktrees-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-worktrees-"));
 
   const gitInit = await runShellCommand("git init", { cwd: tmpDir });
   assert.equal(gitInit.code, 0, gitInit.stderr || gitInit.stdout);
   const gitEmail = await runShellCommand('git config user.email "test@example.com"', { cwd: tmpDir });
   assert.equal(gitEmail.code, 0, gitEmail.stderr || gitEmail.stdout);
-  const gitName = await runShellCommand('git config user.name "Choreo Test"', { cwd: tmpDir });
+  const gitName = await runShellCommand('git config user.name "Dagain Test"', { cwd: tmpDir });
   assert.equal(gitName.code, 0, gitName.stderr || gitName.stdout);
 
   await writeFile(path.join(tmpDir, "shared.txt"), "base-1\nbase-2\nbase-3\nbase-4\nbase-5\n", "utf8");

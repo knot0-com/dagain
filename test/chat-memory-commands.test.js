@@ -6,11 +6,21 @@ import { spawn } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
+function sanitizedEnv() {
+  const env = { ...process.env, NO_COLOR: "1" };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("DAGAIN_") || key.startsWith("DAGAIN_") || key.startsWith("TASKGRAPH_")) {
+      delete env[key];
+    }
+  }
+  return env;
+}
+
 function runCli({ binPath, cwd, args }) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [binPath, ...args], {
       cwd,
-      env: { ...process.env, NO_COLOR: "1" },
+      env: sanitizedEnv(),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -28,7 +38,7 @@ function runCliInteractive({ binPath, cwd, args, input }) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [binPath, ...args], {
       cwd,
-      env: { ...process.env, NO_COLOR: "1" },
+      env: sanitizedEnv(),
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
@@ -44,9 +54,9 @@ function runCliInteractive({ binPath, cwd, args, input }) {
 }
 
 test("chat: /memory prints rollup and /forget clears it", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-chat-memory-cmds-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-chat-memory-cmds-"));
 
   const initRes = await runCli({
     binPath,
@@ -73,4 +83,3 @@ test("chat: /memory prints rollup and /forget clears it", async () => {
   assert.match(res.stdout, /Cleared chat memory/);
   assert.match(res.stdout, /Chat memory: \(empty\)/);
 });
-

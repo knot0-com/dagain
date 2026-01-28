@@ -30,11 +30,11 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("end-to-end: planner -> executor -> verifier -> done", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
   const mockAgentPath = fileURLToPath(new URL("../scripts/mock-agent.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-e2e-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-e2e-"));
 
   const initRes = await runCli({
     binPath,
@@ -86,7 +86,7 @@ test("end-to-end: planner -> executor -> verifier -> done", async () => {
 
   const helloPath = path.join(tmpDir, "hello.txt");
   const hello = await readFile(helloPath, "utf8");
-  assert.equal(hello, "hello from choreo\n");
+  assert.equal(hello, "hello from dagain\n");
 
   const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
   await stat(dbPath);

@@ -1,10 +1,10 @@
-# Choreo Parallel Workers Implementation Plan
+# Dagain Parallel Workers Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task.
 
-**Goal:** Add `choreo run --workers N` to execute multiple runnable nodes concurrently under a single supervisor, while keeping edits safe via `ownership`-based resource locks and supporting conflict-prone executor work via optional git worktrees + serialized merges.
+**Goal:** Add `dagain run --workers N` to execute multiple runnable nodes concurrently under a single supervisor, while keeping edits safe via `ownership`-based resource locks and supporting conflict-prone executor work via optional git worktrees + serialized merges.
 
-**Architecture:** Keep `.choreo/lock` as the single-supervisor authority. The supervisor owns scheduling + DB state transitions (`claimNode`, `applyResult`) and spawns an in-process worker pool that runs runner subprocesses concurrently. Concurrency safety is enforced by an in-memory resource lock table derived from `node.ownership` (empty ownership defaults to a `__global__` write lock). For conflict-heavy executor tasks, optionally run tasks inside isolated worktrees and introduce a required, serialized `merge-*` node to apply changes back to the root workspace before verification/integration.
+**Architecture:** Keep `.dagain/lock` as the single-supervisor authority. The supervisor owns scheduling + DB state transitions (`claimNode`, `applyResult`) and spawns an in-process worker pool that runs runner subprocesses concurrently. Concurrency safety is enforced by an in-memory resource lock table derived from `node.ownership` (empty ownership defaults to a `__global__` write lock). For conflict-heavy executor tasks, optionally run tasks inside isolated worktrees and introduce a required, serialized `merge-*` node to apply changes back to the root workspace before verification/integration.
 
 **Tech Stack:** Node.js (>=18), SQLite (`sqlite3` CLI), `node:test`, git (optional; required for worktree mode).
 
@@ -12,7 +12,7 @@
 
 ## Success Metrics
 
-- `choreo run --workers 2+` runs multiple nodes in parallel **without corrupting `.choreo/memory/*`** or DB state.
+- `dagain run --workers 2+` runs multiple nodes in parallel **without corrupting `.dagain/memory/*`** or DB state.
 - Verify/research nodes can run concurrently (read locks), executor nodes run concurrently only when ownership is disjoint (write locks), and empty-ownership nodes serialize via `__global__`.
 - With overlapping ownership and worktrees enabled, executor nodes can proceed in parallel, and merges serialize deterministically via merge nodes.
 - No behavior change when `--workers` is omitted (defaults to `1`).
@@ -39,11 +39,11 @@
 
 ### 1) Worker pool scheduling model
 
-- Add `--workers <n>` to `choreo run` and `choreo resume`. Default: `1`.
+- Add `--workers <n>` to `dagain run` and `dagain resume`. Default: `1`.
 - Supervisor loop maintains:
   - `maxWorkers`
   - `inFlight` (map of `nodeId -> { runId, promise, locks }`)
-  - an `applyQueue` (a promise chain) so **all DB writes + `.choreo/memory/*` writes remain serialized** even when runners run concurrently.
+  - an `applyQueue` (a promise chain) so **all DB writes + `.dagain/memory/*` writes remain serialized** even when runners run concurrently.
 - Dispatch algorithm:
   1) If capacity available, fetch a candidate batch (e.g. `LIMIT 50`) from DB ordered by current priority (verify > task > plan > integrate > final_verify).
   2) Filter by ownership lock availability.
@@ -70,12 +70,12 @@
 
 Add `supervisor.worktrees`:
 - `mode`: `"off" | "on-conflict" | "always"` (default `"off"`)
-- `dir`: path (default `.choreo/worktrees`)
+- `dir`: path (default `.dagain/worktrees`)
 
 Behavior (only for `task` nodes / executor role):
 - If mode is `always`, run all executor nodes in a worktree.
 - If mode is `on-conflict`, run executor nodes in a worktree only when they would be blocked by an ownership write lock conflict.
-- When a task runs in a worktree, Choreo must create a mandatory `merge-<taskId>` node:
+- When a task runs in a worktree, Dagain must create a mandatory `merge-<taskId>` node:
   - `type: "task"` (executor role), runner: `shellMerge`
   - depends on the executor task
   - ownership: `["__global__"]` (serialize merges)
@@ -104,7 +104,7 @@ If a merge fails:
 **Step 1: Write the failing test**
 
 Create `test/parallel-workers-flag.test.js`:
-- Assert `node bin/choreo.js --help` output contains `--workers`.
+- Assert `node bin/dagain.js --help` output contains `--workers`.
 - Assert config default includes `supervisor.workers: 1` (read `src/lib/config.js` defaultConfig).
 
 Run: `npm test -- test/parallel-workers-flag.test.js`  
@@ -132,7 +132,7 @@ Expected: PASS.
 **Step 1: Write the failing test**
 
 Create `test/select-runnable-candidates.test.js`:
-- Initialize a temp choreo DB (same setup pattern as `test/select-sql.test.js`).
+- Initialize a temp dagain DB (same setup pattern as `test/select-sql.test.js`).
 - Insert multiple open runnable nodes across types.
 - Call `selectRunnableCandidates({ dbPath, nowIso, limit: 10 })`.
 - Assert:
@@ -210,10 +210,10 @@ Create `scripts/mock-sleep-agent.js`:
   - integrator/finalVerifier immediately succeed
 
 Create `test/parallel-workers-scheduling.test.js`:
-- `choreo init ...`
-- Write `.choreo/config.json` using the mock sleep agent for planner/executor/integrator/finalVerifier and `shellVerify` for verifier (or disable verify nodes by having no verify specs).
-- Run `choreo run --workers 2 --max-iterations 50 --interval-ms 0 --no-live --no-color`.
-- Read `.choreo/memory/activity.log` and assert:
+- `dagain init ...`
+- Write `.dagain/config.json` using the mock sleep agent for planner/executor/integrator/finalVerifier and `shellVerify` for verifier (or disable verify nodes by having no verify specs).
+- Run `dagain run --workers 2 --max-iterations 50 --interval-ms 0 --no-live --no-color`.
+- Read `.dagain/memory/activity.log` and assert:
   - there are `spawn role=executor` entries for both `task-a` and `task-b`
   - `spawn task-b` appears **before** the first `exit ... node=task-a` (proves parallel dispatch)
 
@@ -227,7 +227,7 @@ Expected: FAIL (workers not supported; tasks run serially).
   - dispatch loop that fills capacity from `selectRunnableCandidates`
   - uses ownership locks to decide which to spawn
   - uses `claimNode` before spawning
-  - uses a serialized `applyQueue` to apply DB + memory updates (avoid `.choreo/memory/*` races)
+  - uses a serialized `applyQueue` to apply DB + memory updates (avoid `.dagain/memory/*` races)
   - when nothing runnable and `inFlight.size > 0`, `await Promise.race([...inFlightPromises])`
 
 Run: `npm test -- test/parallel-workers-scheduling.test.js`  
@@ -317,14 +317,14 @@ Expected: PASS.
 
 Create `test/worktrees-parallel-executors.test.js`:
 - Create a temp dir, `git init`, commit a baseline file.
-- Configure choreo with:
+- Configure dagain with:
   - `supervisor.workers=2`
   - `supervisor.worktrees.mode="always"`
   - executor runner = mock sleep agent that edits the same file (so ownership conflicts would exist)
   - shell merge runner enabled as `shellMerge`
 - Planner emits two executor tasks that both edit `shared.txt` and set `ownership=["shared.txt"]`.
-- Ensure Choreo inserts `merge-task-a` and `merge-task-b` nodes, and verify/integrate depend on merges.
-- Run `choreo run ...`
+- Ensure Dagain inserts `merge-task-a` and `merge-task-b` nodes, and verify/integrate depend on merges.
+- Run `dagain run ...`
 - Assert final `shared.txt` in root includes both expected edits OR merge conflict produces a failed merge node deterministically.
 
 Run: `npm test -- test/worktrees-parallel-executors.test.js`  
@@ -352,8 +352,8 @@ Expected: PASS (either successful merges or deterministic failure).
 ## Smoke (manual)
 
 From any repo:
-- `choreo init --goal "..." --no-refine --force`
-- `choreo run --workers 4 --interval-ms 0`
+- `dagain init --goal "..." --no-refine --force`
+- `dagain run --workers 4 --interval-ms 0`
 
 If you see `database is locked`, increase SQLite timeout (already set to `.timeout 5000`) and ensure the repo is on a local filesystem.
 

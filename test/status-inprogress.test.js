@@ -32,10 +32,10 @@ function sqlQuote(value) {
 }
 
 test("status: shows in-progress nodes with log paths", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-status-inprogress-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-status-inprogress-"));
   const initRes = await runCli({
     binPath,
     cwd: tmpDir,
@@ -50,13 +50,13 @@ test("status: shows in-progress nodes with log paths", async () => {
   await sqliteExec(
     dbPath,
     `UPDATE nodes\n` +
-      `SET status='in_progress',\n` +
-      `    lock_run_id=${sqlQuote(runId)},\n` +
-      `    lock_started_at=${sqlQuote(now)},\n` +
-      `    lock_pid=12345,\n` +
-      `    lock_host='test-host',\n` +
-      `    updated_at=${sqlQuote(now)}\n` +
-      `WHERE id='plan-000';\n`,
+    `SET status='in_progress',\n` +
+    `    lock_run_id=${sqlQuote(runId)},\n` +
+    `    lock_started_at=${sqlQuote(now)},\n` +
+    `    lock_pid=12345,\n` +
+    `    lock_host='test-host',\n` +
+    `    updated_at=${sqlQuote(now)}\n` +
+    `WHERE id='plan-000';\n`,
   );
 
   const statusRes = await runCli({ binPath, cwd: tmpDir, args: ["status", "--no-color"] });

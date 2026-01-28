@@ -31,9 +31,9 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("selectRunnableCandidates: returns ordered runnable batch", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-select-candidates-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-select-candidates-"));
 
   const initRes = await runCli({
     binPath,
@@ -47,15 +47,15 @@ test("selectRunnableCandidates: returns ordered runnable batch", async () => {
   await sqliteExec(
     dbPath,
     `DELETE FROM deps;\n` +
-      `DELETE FROM nodes;\n` +
-      `INSERT INTO nodes(id, title, type, status, created_at, updated_at) VALUES('a','a','task','done','${now}','${now}');\n` +
-      `INSERT INTO nodes(id, title, type, status, created_at, updated_at) VALUES('b','b','task','open','${now}','${now}');\n` +
-      `INSERT INTO nodes(id, title, type, status, created_at, updated_at) VALUES('c','c','verify','open','${now}','${now}');\n` +
-      `INSERT INTO nodes(id, title, type, status, lock_run_id, created_at, updated_at) VALUES('d','d','task','open','r1','${now}','${now}');\n` +
-      `INSERT INTO nodes(id, title, type, status, created_at, updated_at) VALUES('e','e','task','open','${now}','${now}');\n` +
-      `INSERT INTO nodes(id, title, type, status, created_at, updated_at) VALUES('f','f','task','open','${now}','${now}');\n` +
-      `INSERT INTO deps(node_id, depends_on_id) VALUES('b','a');\n` +
-      `INSERT INTO deps(node_id, depends_on_id) VALUES('e','f');\n`,
+    `DELETE FROM nodes;\n` +
+    `INSERT INTO nodes(id, title, type, status, created_at, updated_at) VALUES('a','a','task','done','${now}','${now}');\n` +
+    `INSERT INTO nodes(id, title, type, status, created_at, updated_at) VALUES('b','b','task','open','${now}','${now}');\n` +
+    `INSERT INTO nodes(id, title, type, status, created_at, updated_at) VALUES('c','c','verify','open','${now}','${now}');\n` +
+    `INSERT INTO nodes(id, title, type, status, lock_run_id, created_at, updated_at) VALUES('d','d','task','open','r1','${now}','${now}');\n` +
+    `INSERT INTO nodes(id, title, type, status, created_at, updated_at) VALUES('e','e','task','open','${now}','${now}');\n` +
+    `INSERT INTO nodes(id, title, type, status, created_at, updated_at) VALUES('f','f','task','open','${now}','${now}');\n` +
+    `INSERT INTO deps(node_id, depends_on_id) VALUES('b','a');\n` +
+    `INSERT INTO deps(node_id, depends_on_id) VALUES('e','f');\n`,
   );
 
   const rows = await selectRunnableCandidates({ dbPath, nowIso: new Date().toISOString(), limit: 10 });

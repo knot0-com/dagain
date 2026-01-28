@@ -25,10 +25,10 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("templates sync: overwrites only with --force", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-templates-sync-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-templates-sync-"));
   const initRes = await runCli({
     binPath,
     cwd: tmpDir,
@@ -50,6 +50,6 @@ test("templates sync: overwrites only with --force", async () => {
   const syncForceRes = await runCli({ binPath, cwd: tmpDir, args: ["templates", "sync", "--force", "--no-color"] });
   assert.equal(syncForceRes.code, 0, syncForceRes.stderr || syncForceRes.stdout);
   const afterForce = await readFile(target, "utf8");
-  assert.match(afterForce, /#\s*Choreo Packet — Integrator \(Analysis\)/i);
+  assert.match(afterForce, /#\s*Dagain Packet — Integrator \(Analysis\)/i);
   assert.ok(!afterForce.includes("CUSTOM TEMPLATE"));
 });

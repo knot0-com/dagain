@@ -30,10 +30,10 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("init: creates sqlite state db with plan-000 node", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-db-init-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-db-init-"));
 
   const initRes = await runCli({
     binPath,

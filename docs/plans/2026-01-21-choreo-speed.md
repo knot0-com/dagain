@@ -1,12 +1,12 @@
-# Choreo Speed Improvements Implementation Plan
+# Dagain Speed Improvements Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Make Choreo runs complete significantly faster by reducing full LLM invocations (especially for verification) and preventing runaway node explosion during escalation.
+**Goal:** Make Dagain runs complete significantly faster by reducing full LLM invocations (especially for verification) and preventing runaway node explosion during escalation.
 
 **Architecture:** (1) Add a non‑LLM “shell verifier” runner that executes `node.verify` commands directly and returns a `<result>` without calling Codex/Claude/Gemini. (2) Update scaffolding + templates so planners don’t create duplicate integrate/final-verify nodes and verifiers don’t spawn endless fix chains. (3) Add a “thin packet” option that reduces repeated context sent to coding agents. Keep everything backwards compatible and configurable.
 
-**Tech Stack:** Node.js (`node:test`), SQLite (`sqlite3` CLI), Choreo CLI (`src/cli.js`)
+**Tech Stack:** Node.js (`node:test`), SQLite (`sqlite3` CLI), Dagain CLI (`src/cli.js`)
 
 ---
 
@@ -33,8 +33,8 @@ Create `test/shell-verifier.test.js`:
   - success case: `["node -e \"process.exit(0)\""]`
   - fail case: `["node -e \"process.exit(1)\""]`
 - Spawn `node scripts/shell-verifier.js` with env:
-  - `CHOREO_DB=<dbPath>`
-  - `CHOREO_NODE_ID=<nodeId>`
+  - `DAGAIN_DB=<dbPath>`
+  - `DAGAIN_NODE_ID=<nodeId>`
 - Assert it prints `<result>...</result>` and:
   - success → `status:"success"`
   - fail → `status:"fail"` and includes the failing command in `errors`
@@ -45,7 +45,7 @@ Expected: FAIL (script missing)
 **Step 2: Implement minimal runner**
 
 Implement `scripts/shell-verifier.js`:
-- Read `CHOREO_DB`, `CHOREO_NODE_ID` env
+- Read `DAGAIN_DB`, `DAGAIN_NODE_ID` env
 - `sqlite3 -json` (or reuse JS spawn) to fetch `verify_json` for the node
 - Execute each command via `bash -lc <cmd>` (sequentially)
 - Emit `<result>`:
@@ -73,13 +73,13 @@ Run:
 **Step 1: Write failing test**
 
 Create `test/scaffold-default-verifier-runner.test.js`:
-- Create a temp choreo project (similar to `test/planner-scaffold.test.js`)
-- Write `.choreo/config.json` that defines:
+- Create a temp dagain project (similar to `test/planner-scaffold.test.js`)
+- Write `.dagain/config.json` that defines:
   - `runners.shellVerify: { cmd: "node <abs>/scripts/shell-verifier.js" }`
   - `defaults.verifyRunner: "shellVerify"`
   - planner/executor can be mock agents (existing scripts)
 - Use a mock planner that outputs **tasks only** (so scaffolding creates verify nodes).
-- Run `choreo run --max-iterations 2 --interval-ms 0 --no-live --no-color` (iteration 1 runs the planner; iteration 2 runs scaffolding and exits before executing tasks).
+- Run `dagain run --max-iterations 2 --interval-ms 0 --no-live --no-color` (iteration 1 runs the planner; iteration 2 runs scaffolding and exits before executing tasks).
 - Query sqlite `nodes` for created `verify-*` nodes and assert `runner='shellVerify'`.
 
 Run: `npm test -- test/scaffold-default-verifier-runner.test.js`
@@ -119,14 +119,14 @@ In `templates/planner.md`, change “Planning Rules”:
 - Remove the requirement that planners must add `integrate-*` and `final-verify-*` nodes.
 - Encourage “tasks-only” planning:
   - Add 2–6 `task-*` nodes max
-  - (Optional) add `verify-*` nodes, but only if it’s essential; otherwise rely on Choreo scaffolding.
-- Add guardrail: “Do not create additional integrate/final-verify nodes; Choreo will scaffold them.”
+  - (Optional) add `verify-*` nodes, but only if it’s essential; otherwise rely on Dagain scaffolding.
+- Add guardrail: “Do not create additional integrate/final-verify nodes; Dagain will scaffold them.”
 
 **Step 2: Manual smoke run**
 
 Run a small goal and confirm the planner produces fewer nodes:
-- `choreo init --goal "…" --no-refine --force`
-- `choreo run`
+- `dagain init --goal "…" --no-refine --force`
+- `dagain run`
 Expected: only one integrate and one final-verify (scaffolded), not one per escalation.
 
 **Step 3: Commit**
@@ -198,5 +198,5 @@ Use the JSON-RPC demo style goal and record:
 
 Run:
 - `git add README.md docs/fast-config.md`
-- `git commit -m "docs(perf): document fast choreo profile"`
+- `git commit -m "docs(perf): document fast dagain profile"`
 

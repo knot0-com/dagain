@@ -50,9 +50,9 @@ function runCliInteractive({ binPath, cwd, args, input }) {
 }
 
 test("chat: --no-llm prints a helpful fallback for free-form input", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-chat-no-llm-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-chat-no-llm-"));
 
   const initRes = await runCli({
     binPath,

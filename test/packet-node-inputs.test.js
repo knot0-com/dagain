@@ -30,11 +30,11 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("packet: renders Node Inputs from inputs_json refs", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
   const packetDumpPath = fileURLToPath(new URL("../scripts/mock-agent-packet-dump.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-node-inputs-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-node-inputs-"));
   const initRes = await runCli({
     binPath,
     cwd: tmpDir,
@@ -48,8 +48,8 @@ test("packet: renders Node Inputs from inputs_json refs", async () => {
   await sqliteExec(
     dbPath,
     `INSERT OR REPLACE INTO kv_latest(node_id, key, value_text, updated_at)\n` +
-      `VALUES('__run__', 'ctx.foo', 'bar', '${now}');\n` +
-      `UPDATE nodes SET inputs_json='${inputsJson}' WHERE id='plan-000';\n`,
+    `VALUES('__run__', 'ctx.foo', 'bar', '${now}');\n` +
+    `UPDATE nodes SET inputs_json='${inputsJson}' WHERE id='plan-000';\n`,
   );
 
   const configPath = path.join(tmpDir, ".dagain", "config.json");

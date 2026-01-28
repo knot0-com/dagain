@@ -69,7 +69,7 @@ async function gitTopLevel(cwd) {
 }
 
 async function loadConfig(rootDir) {
-  for (const dirName of [".dagain", ".taskgraph", ".choreo"]) {
+  for (const dirName of [".dagain", ".taskgraph"]) {
     const configPath = path.join(rootDir, dirName, "config.json");
     try {
       const text = await fs.readFile(configPath, "utf8");
@@ -86,9 +86,9 @@ async function ensureDir(dirPath) {
 }
 
 async function main() {
-  const dbPath = String(process.env.CHOREO_DB || "").trim();
-  const nodeId = String(process.env.CHOREO_NODE_ID || "").trim();
-  const artifactsDir = String(process.env.CHOREO_ARTIFACTS_DIR || "").trim();
+  const dbPath = String(process.env.DAGAIN_DB || "").trim();
+  const nodeId = String(process.env.DAGAIN_NODE_ID || "").trim();
+  const artifactsDir = String(process.env.DAGAIN_ARTIFACTS_DIR || "").trim();
 
   if (!dbPath || !nodeId) {
     result({
@@ -96,10 +96,10 @@ async function main() {
       role: "executor",
       nodeId,
       status: "fail",
-      summary: "Missing $CHOREO_DB or $CHOREO_NODE_ID",
+      summary: "Missing $DAGAIN_DB or $DAGAIN_NODE_ID",
       next: { addNodes: [], setStatus: [] },
       checkpoint: null,
-      errors: ["Missing $CHOREO_DB or $CHOREO_NODE_ID"],
+      errors: ["Missing $DAGAIN_DB or $DAGAIN_NODE_ID"],
       confidence: 0,
     });
     return;
@@ -209,11 +209,10 @@ async function main() {
     ":(exclude)GOAL.md",
     ":(exclude).dagain",
     ":(exclude).taskgraph",
-    ":(exclude).choreo",
   ];
   const addRes = await runGit(worktreePath, addArgs);
   commands.push(
-    `git -C ${worktreePath} add -A -- . ':(exclude)GOAL.md' ':(exclude).dagain' ':(exclude).taskgraph' ':(exclude).choreo'`,
+    `git -C ${worktreePath} add -A -- . ':(exclude)GOAL.md' ':(exclude).dagain' ':(exclude).taskgraph'`,
   );
   if (addRes.code !== 0) {
     const msg = `Failed to stage worktree changes (exit ${addRes.code})`;
@@ -324,7 +323,7 @@ try {
   result({
     version: 1,
     role: "executor",
-    nodeId: String(process.env.CHOREO_NODE_ID || "").trim(),
+    nodeId: String(process.env.DAGAIN_NODE_ID || "").trim(),
     status: "fail",
     summary: msg,
     next: { addNodes: [], setStatus: [] },

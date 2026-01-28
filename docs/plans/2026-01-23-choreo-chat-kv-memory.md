@@ -1,8 +1,8 @@
-# Choreo Chat KV Memory Implementation Plan
+# Dagain Chat KV Memory Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task.
 
-**Goal:** Persist lightweight `choreo chat` conversation memory into SQLite KV (`__run__`) and inject it into the chat router prompt so the default planner runner can keep context across turns.
+**Goal:** Persist lightweight `dagain chat` conversation memory into SQLite KV (`__run__`) and inject it into the chat router prompt so the default planner runner can keep context across turns.
 
 **Architecture:** Treat chat memory as run-scoped state stored in `kv_latest` under node id `__run__`. After each routed chat turn, write `chat.summary` (short assistant reply), `chat.last_ops` (JSON), and `chat.turns` (JSON array of last N turns). Before each routed chat turn, read these keys and include a compact “Chat memory” section in the router prompt.
 
@@ -20,9 +20,9 @@
 **Step 1: Write the failing test**
 
 Create `test/chat-kv-memory.test.js`:
-- Init a temp project (`choreo init --no-refine`).
+- Init a temp project (`dagain init --no-refine`).
 - Configure a mock runner for chat routing that prints different replies depending on whether the packet contains prior “Chat memory”.
-- Run `choreo chat --runner mock` twice:
+- Run `dagain chat --runner mock` twice:
   1) First run sends `hello` then `/exit`; assert KV contains `__run__:chat.turns` with `hello`.
   2) Second run sends `hi again` then `/exit`; assert stdout includes a reply indicating memory was present.
 

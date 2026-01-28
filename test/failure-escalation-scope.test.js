@@ -31,9 +31,9 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("applyResult: leaf failure escalates to nearest plan scope", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-escalation-scope-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-escalation-scope-"));
 
   const initRes = await runCli({
     binPath,
@@ -47,13 +47,13 @@ test("applyResult: leaf failure escalates to nearest plan scope", async () => {
   await sqliteExec(
     dbPath,
     `DELETE FROM deps;\n` +
-      `DELETE FROM nodes;\n` +
-      `INSERT INTO nodes(id, title, type, status, parent_id, retry_policy_json, created_at, updated_at)\n` +
-      `VALUES\n` +
-      `  ('plan-root','root','plan','open',NULL,'{\"maxAttempts\":1}','${now}','${now}'),\n` +
-      `  ('plan-child','child','plan','open','plan-root','{\"maxAttempts\":1}','${now}','${now}'),\n` +
-      `  ('task-parent','p','task','open','plan-child','{\"maxAttempts\":1}','${now}','${now}'),\n` +
-      `  ('task-sub','s','task','open','task-parent','{\"maxAttempts\":1}','${now}','${now}');\n`,
+    `DELETE FROM nodes;\n` +
+    `INSERT INTO nodes(id, title, type, status, parent_id, retry_policy_json, created_at, updated_at)\n` +
+    `VALUES\n` +
+    `  ('plan-root','root','plan','open',NULL,'{\"maxAttempts\":1}','${now}','${now}'),\n` +
+    `  ('plan-child','child','plan','open','plan-root','{\"maxAttempts\":1}','${now}','${now}'),\n` +
+    `  ('task-parent','p','task','open','plan-child','{\"maxAttempts\":1}','${now}','${now}'),\n` +
+    `  ('task-sub','s','task','open','task-parent','{\"maxAttempts\":1}','${now}','${now}');\n`,
   );
 
   await applyResult({
@@ -83,10 +83,10 @@ test("applyResult: leaf failure escalates to nearest plan scope", async () => {
   await sqliteExec(
     dbPath,
     `UPDATE nodes\n` +
-      `SET status='done', attempts=0, completed_at='${now}', updated_at='${now}'\n` +
-      `WHERE id='plan-escalate-plan-child';\n` +
-      `INSERT INTO nodes(id, title, type, status, parent_id, retry_policy_json, created_at, updated_at)\n` +
-      `VALUES('task-sub-2','s2','task','open','task-parent','{\"maxAttempts\":1}','${now}','${now}');\n`,
+    `SET status='done', attempts=0, completed_at='${now}', updated_at='${now}'\n` +
+    `WHERE id='plan-escalate-plan-child';\n` +
+    `INSERT INTO nodes(id, title, type, status, parent_id, retry_policy_json, created_at, updated_at)\n` +
+    `VALUES('task-sub-2','s2','task','open','task-parent','{\"maxAttempts\":1}','${now}','${now}');\n`,
   );
 
   await applyResult({

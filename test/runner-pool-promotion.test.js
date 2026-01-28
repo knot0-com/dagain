@@ -30,8 +30,8 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("runnerPool: promotes to next runner on missing_result", { timeout: 15_000 }, async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "dagain.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
   const noResultPath = fileURLToPath(new URL("../scripts/mock-agent-noresult.js", import.meta.url));
   const markerPath = fileURLToPath(new URL("../scripts/mock-agent-marker.js", import.meta.url));
   const logAgentPath = fileURLToPath(new URL("../scripts/mock-agent-log.js", import.meta.url));
@@ -137,8 +137,8 @@ test("runnerPool: promotes to next runner on missing_result", { timeout: 15_000 
 });
 
 test("runnerPool: promotes to next runner only after K task failures", { timeout: 15_000 }, async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "dagain.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
   const failPath = fileURLToPath(new URL("../scripts/mock-agent-fail-marker.js", import.meta.url));
   const markerPath = fileURLToPath(new URL("../scripts/mock-agent-marker.js", import.meta.url));
   const logAgentPath = fileURLToPath(new URL("../scripts/mock-agent-log.js", import.meta.url));

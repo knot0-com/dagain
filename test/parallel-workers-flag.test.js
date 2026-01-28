@@ -27,8 +27,8 @@ function runCliHelp({ binPath }) {
 }
 
 test("help: run documents --workers flag", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
 
   const res = await runCliHelp({ binPath });
   assert.equal(res.code, 0, res.stderr || res.stdout);
@@ -39,4 +39,3 @@ test("defaultConfig: supervisor.workers defaults to 1", () => {
   const config = defaultConfig();
   assert.equal(config?.supervisor?.workers, 1);
 });
-

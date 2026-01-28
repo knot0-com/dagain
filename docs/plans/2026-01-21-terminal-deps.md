@@ -6,7 +6,7 @@
 
 **Architecture:** Add a `deps.required_status` column (default `done`). Update the DB scheduler query to treat each dep as satisfied based on `required_status`. Update “graph blocked by failed deps” logic to only consider `done`-required edges. Set escalation edges to `required_status='terminal'`.
 
-**Tech Stack:** Node.js (`node:test`), SQLite (`sqlite3` CLI), Choreo CLI (`src/cli.js`)
+**Tech Stack:** Node.js (`node:test`), SQLite (`sqlite3` CLI), Dagain CLI (`src/cli.js`)
 
 ---
 
@@ -38,7 +38,7 @@ Create `src/lib/db/migrate.js`:
 **Step 3: Wire migration into the CLI**
 
 In `src/cli.js`:
-- After `.choreo/state.sqlite` existence checks in `runCommand`, call `ensureDepsRequiredStatusColumn({ dbPath: paths.dbPath })`
+- After `.dagain/state.sqlite` existence checks in `runCommand`, call `ensureDepsRequiredStatusColumn({ dbPath: paths.dbPath })`
 - In `initCommand`, call it after schema creation (harmless/no-op for new DBs)
 
 Run: `npm test`

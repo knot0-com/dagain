@@ -29,11 +29,11 @@ function runCli({ binPath, cwd, args, env = {} }) {
 }
 
 test("microcall: prints extracted result JSON", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
   const mockAgentPath = fileURLToPath(new URL("../scripts/mock-agent-log.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-microcall-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-microcall-"));
 
   const initRes = await runCli({
     binPath,

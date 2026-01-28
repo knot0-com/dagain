@@ -30,9 +30,9 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("exportWorkgraphJson: writes nodes snapshot from sqlite", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-export-"));
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-export-"));
 
   const initRes = await runCli({
     binPath,
@@ -51,4 +51,3 @@ test("exportWorkgraphJson: writes nodes snapshot from sqlite", async () => {
   assert.ok(Array.isArray(snapshot.nodes));
   assert.ok(snapshot.nodes.some((n) => n.id === "plan-000"));
 });
-

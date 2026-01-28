@@ -46,10 +46,10 @@ function runCliInteractive({ binPath, cwd, args, input }) {
 }
 
 test("chat: stores LLM-updated rolling summary in KV and injects it next run", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
   const routerPath = fileURLToPath(new URL("../scripts/mock-chat-router-rollup.js", import.meta.url));
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-chat-rollup-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-chat-rollup-"));
 
   const initRes = await runCli({
     binPath,

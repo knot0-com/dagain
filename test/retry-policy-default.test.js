@@ -39,9 +39,9 @@ function parseRetryPolicy(row) {
 }
 
 test("applyResult: defaultRetryPolicy applies to added nodes", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-retry-policy-"));
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-retry-policy-"));
 
   const initRes = await runCli({
     binPath,
@@ -81,9 +81,9 @@ test("applyResult: defaultRetryPolicy applies to added nodes", async () => {
 });
 
 test("applyResult: defaultRetryPolicy applies to escalation nodes", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-retry-policy-escalate-"));
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-retry-policy-escalate-"));
 
   const initRes = await runCli({
     binPath,
@@ -115,4 +115,3 @@ test("applyResult: defaultRetryPolicy applies to escalation nodes", async () => 
   const policy = parseRetryPolicy(escalationRows[0]);
   assert.equal(policy?.maxAttempts, 1);
 });
-

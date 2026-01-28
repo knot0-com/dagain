@@ -1,10 +1,10 @@
-# Choreo Chat Rich Graph Ops Implementation Plan
+# Dagain Chat Rich Graph Ops Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task.
 
-**Goal:** Let `choreo chat` route natural language into safe, explicit “graph ops” that can add/update nodes and add/remove dependencies in the SQLite workgraph.
+**Goal:** Let `dagain chat` route natural language into safe, explicit “graph ops” that can add/update nodes and add/remove dependencies in the SQLite workgraph.
 
-**Architecture:** Keep the LLM as a pure planner/router that emits `ops[]` JSON. Choreo remains the sole authority that mutates SQLite by executing a small, validated op surface area (`node.add`, `node.update`, `dep.add`, `dep.remove`). After any graph mutation, export a graph snapshot and re-sync `workgraph.json` for human readability.
+**Architecture:** Keep the LLM as a pure planner/router that emits `ops[]` JSON. Dagain remains the sole authority that mutates SQLite by executing a small, validated op surface area (`node.add`, `node.update`, `dep.add`, `dep.remove`). After any graph mutation, export a graph snapshot and re-sync `workgraph.json` for human readability.
 
 **Tech Stack:** Node.js (>=18), SQLite (`sqlite3` CLI), `node:test`, existing DB helpers in `src/lib/db/*`.
 
@@ -19,9 +19,9 @@
 **Step 1: Write a failing integration test**
 
 Create `test/chat-graph-ops.test.js` that:
-- Initializes a temp project via `choreo init --goal X --no-refine`.
+- Initializes a temp project via `dagain init --goal X --no-refine`.
 - Configures a `mock` runner pointing at `scripts/mock-chat-router-graph-ops.js`.
-- Runs `choreo chat --runner mock` with two free-form messages:
+- Runs `dagain chat --runner mock` with two free-form messages:
   1) returns ops that add two tasks with rich metadata (inputs/ownership/acceptance/verify/retryPolicy) and a dependency between them
   2) returns ops that update metadata on an existing node
 - Asserts:
@@ -47,7 +47,7 @@ Expected: still FAIL
 **Files:**
 - Modify: `src/cli.js`
 
-**Step 1: Add `choreo dep add/remove`**
+**Step 1: Add `dagain dep add/remove`**
 - `dep add` upserts into `deps(node_id, depends_on_id, required_status)`.
 - `dep remove` deletes the row.
 - After each op, re-export graph snapshot and call `syncTaskPlan`.
@@ -55,7 +55,7 @@ Expected: still FAIL
 Run: `npm test -- test/chat-graph-ops.test.js`  
 Expected: still FAIL
 
-**Step 2: Extend `choreo node add` to accept rich fields**
+**Step 2: Extend `dagain node add` to accept rich fields**
 - Accept optional `inputs`, `ownership`, `acceptance`, `verify`, `retryPolicy`, `dependsOn`.
 - Store JSON columns directly into `nodes.*_json` (defaulting to empty arrays / default retry policy).
 - Insert dependencies (default required_status=`done`).
@@ -63,7 +63,7 @@ Expected: still FAIL
 Run: `npm test -- test/chat-graph-ops.test.js`  
 Expected: still FAIL
 
-**Step 3: Add `choreo node update`**
+**Step 3: Add `dagain node update`**
 - Patch node metadata fields (no implicit dep rewrites).
 - Refuse to update locked nodes unless `--force`.
 - Re-export + sync after mutation.

@@ -31,9 +31,9 @@ function runCli({ binPath, cwd, args, env = {} }) {
 }
 
 test("kv: CLI put writes kv_latest using env defaults", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-kv-cli-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-kv-cli-"));
 
   const initRes = await runCli({
     binPath,
@@ -48,9 +48,9 @@ test("kv: CLI put writes kv_latest using env defaults", async () => {
     binPath,
     cwd: tmpDir,
     env: {
-      CHOREO_DB: dbPath,
-      CHOREO_NODE_ID: "task-001",
-      CHOREO_RUN_ID: "run-1",
+      DAGAIN_DB: dbPath,
+      DAGAIN_NODE_ID: "task-001",
+      DAGAIN_RUN_ID: "run-1",
     },
     args: [
       "kv",

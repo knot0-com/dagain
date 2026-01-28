@@ -44,10 +44,10 @@ function runCliInteractive({ binPath, cwd, args, input }) {
 }
 
 test("chat: defaults to planner runner for NL routing", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
   const mockAgentPath = fileURLToPath(new URL("../scripts/mock-agent-marker.js", import.meta.url));
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-chat-default-planner-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-chat-default-planner-"));
 
   const initRes = await runCli({
     binPath,
@@ -93,4 +93,3 @@ test("chat: defaults to planner runner for NL routing", async () => {
   const marker = await readFile(path.join(tmpDir, "runner_marker.txt"), "utf8");
   assert.equal(marker.trim(), "planner");
 });
-

@@ -27,12 +27,12 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("scaffolding: verify nodes default to config.defaults.verifyRunner", { timeout: 15_000 }, async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
   const plannerPath = fileURLToPath(new URL("../scripts/mock-planner-tasks-only.js", import.meta.url));
   const shellVerifierPath = fileURLToPath(new URL("../scripts/shell-verifier.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-default-verify-runner-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-default-verify-runner-"));
 
   const initRes = await runCli({
     binPath,

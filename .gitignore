@@ -3,5 +3,6 @@ dist/
 .DS_Store
 .dagain/
 .taskgraph/
-.choreo/
 .worktrees/
+.runs/
+*.log

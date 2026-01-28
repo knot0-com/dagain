@@ -194,18 +194,18 @@ export async function runRunnerCommand({
       resolve(payload);
     };
 
-    try {
-      logStream.write(`[choreo] cmd: ${finalCmd}\n`);
-      logStream.write(`[choreo] cwd: ${cwd}\n`);
-      logStream.write(`[choreo] packet: ${packetAbs}\n`);
-      if (uid != null || gid != null) logStream.write(`[choreo] as: uid=${uid ?? ""} gid=${gid ?? ""}\n`);
-      if (timeoutMs && Number(timeoutMs) > 0) logStream.write(`[choreo] timeoutMs: ${Number(timeoutMs)}\n`);
-      if (envOverrides) {
-        const keys = Object.keys(envOverrides).sort();
-        if (keys.length > 0) logStream.write(`[choreo] env overrides: ${keys.join(", ")}\n`);
-      }
-      logStream.write("\n");
-    } catch {
+	    try {
+	      logStream.write(`[dagain] cmd: ${finalCmd}\n`);
+	      logStream.write(`[dagain] cwd: ${cwd}\n`);
+	      logStream.write(`[dagain] packet: ${packetAbs}\n`);
+	      if (uid != null || gid != null) logStream.write(`[dagain] as: uid=${uid ?? ""} gid=${gid ?? ""}\n`);
+	      if (timeoutMs && Number(timeoutMs) > 0) logStream.write(`[dagain] timeoutMs: ${Number(timeoutMs)}\n`);
+	      if (envOverrides) {
+	        const keys = Object.keys(envOverrides).sort();
+	        if (keys.length > 0) logStream.write(`[dagain] env overrides: ${keys.join(", ")}\n`);
+	      }
+	      logStream.write("\n");
+	    } catch {
       // ignore
     }
 
@@ -226,14 +226,14 @@ export async function runRunnerCommand({
     let killedByAbort = false;
     const timeoutNum = Number(timeoutMs);
     let timeoutId = null;
-    if (Number.isFinite(timeoutNum) && timeoutNum > 0) {
-      timeoutId = setTimeout(() => {
-        killedByTimeout = true;
-        try {
-          logStream.write(`[choreo] ERROR: runner timed out after ${timeoutNum}ms\n`);
-        } catch {
-          // ignore
-        }
+	    if (Number.isFinite(timeoutNum) && timeoutNum > 0) {
+	      timeoutId = setTimeout(() => {
+	        killedByTimeout = true;
+	        try {
+	          logStream.write(`[dagain] ERROR: runner timed out after ${timeoutNum}ms\n`);
+	        } catch {
+	          // ignore
+	        }
         try {
           killProcessTree(child, "SIGTERM");
         } catch {
@@ -251,13 +251,13 @@ export async function runRunnerCommand({
       timeoutId.unref?.();
     }
 
-    abortHandler = () => {
-      killedByAbort = true;
-      try {
-        logStream.write("[choreo] CANCEL: abortSignal triggered\n");
-      } catch {
-        // ignore
-      }
+	    abortHandler = () => {
+	      killedByAbort = true;
+	      try {
+	        logStream.write("[dagain] CANCEL: abortSignal triggered\n");
+	      } catch {
+	        // ignore
+	      }
       killProcessTree(child, "SIGTERM");
       const killId = setTimeout(() => killProcessTree(child, "SIGKILL"), 5_000);
       killId.unref?.();
@@ -281,38 +281,38 @@ export async function runRunnerCommand({
       else child.stderr.pipe(process.stderr, { end: false });
     }
 
-    if (!usesPacketPlaceholder) {
-      const packetStream = createReadStream(packetAbs);
-      packetStream.on("error", (error) => {
-        try {
-          logStream.write(`[choreo] ERROR: failed reading packet for stdin: ${error?.message || String(error)}\n`);
-        } catch {
-          // ignore
-        }
-      });
-      if (child.stdin) {
-        child.stdin.on("error", (error) => {
-          if (error?.code === "EPIPE") return;
-          try {
-            logStream.write(`[choreo] ERROR: stdin pipe failed: ${error?.message || String(error)}\n`);
-          } catch {
-            // ignore
-          }
-        });
-        packetStream.pipe(child.stdin);
+	    if (!usesPacketPlaceholder) {
+	      const packetStream = createReadStream(packetAbs);
+	      packetStream.on("error", (error) => {
+	        try {
+	          logStream.write(`[dagain] ERROR: failed reading packet for stdin: ${error?.message || String(error)}\n`);
+	        } catch {
+	          // ignore
+	        }
+	      });
+	      if (child.stdin) {
+	        child.stdin.on("error", (error) => {
+	          if (error?.code === "EPIPE") return;
+	          try {
+	            logStream.write(`[dagain] ERROR: stdin pipe failed: ${error?.message || String(error)}\n`);
+	          } catch {
+	            // ignore
+	          }
+	        });
+	        packetStream.pipe(child.stdin);
       }
     } else {
       child.stdin.end();
     }
 
-    child.on("error", (error) => {
-      if (timeoutId) clearTimeout(timeoutId);
-      try {
-        logStream.write(`[choreo] ERROR: spawn failed: ${error?.message || String(error)}\n`);
-      } catch {
-        // ignore
-      }
-      finish({
+	    child.on("error", (error) => {
+	      if (timeoutId) clearTimeout(timeoutId);
+	      try {
+	        logStream.write(`[dagain] ERROR: spawn failed: ${error?.message || String(error)}\n`);
+	      } catch {
+	        // ignore
+	      }
+	      finish({
         code: 127,
         signal: null,
         cmd: finalCmd,

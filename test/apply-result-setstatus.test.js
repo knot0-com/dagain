@@ -31,9 +31,9 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("applyResult: next.setStatus can reopen a failed node", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-setstatus-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-setstatus-"));
 
   const initRes = await runCli({
     binPath,
@@ -47,21 +47,21 @@ test("applyResult: next.setStatus can reopen a failed node", async () => {
   await sqliteExec(
     dbPath,
     `DELETE FROM deps;\n` +
-      `DELETE FROM nodes;\n` +
-      `INSERT INTO nodes(id, title, type, status, attempts, retry_policy_json, created_at, updated_at)\n` +
-      `VALUES('a','a','task','open',0,'{\"maxAttempts\":1}','${now}','${now}');\n` +
-      `INSERT INTO nodes(\n` +
-      `  id, title, type, status, attempts, retry_policy_json,\n` +
-      `  lock_run_id, lock_started_at, lock_pid, lock_host,\n` +
-      `  checkpoint_json, completed_at,\n` +
-      `  created_at, updated_at\n` +
-      `)\n` +
-      `VALUES(\n` +
-      `  'b','b','task','failed',1,'{\"maxAttempts\":1}',\n` +
-      `  'run-x','${now}',123,'host',\n` +
-      `  '{\"question\":\"x\"}','${now}',\n` +
-      `  '${now}','${now}'\n` +
-      `);\n`,
+    `DELETE FROM nodes;\n` +
+    `INSERT INTO nodes(id, title, type, status, attempts, retry_policy_json, created_at, updated_at)\n` +
+    `VALUES('a','a','task','open',0,'{\"maxAttempts\":1}','${now}','${now}');\n` +
+    `INSERT INTO nodes(\n` +
+    `  id, title, type, status, attempts, retry_policy_json,\n` +
+    `  lock_run_id, lock_started_at, lock_pid, lock_host,\n` +
+    `  checkpoint_json, completed_at,\n` +
+    `  created_at, updated_at\n` +
+    `)\n` +
+    `VALUES(\n` +
+    `  'b','b','task','failed',1,'{\"maxAttempts\":1}',\n` +
+    `  'run-x','${now}',123,'host',\n` +
+    `  '{\"question\":\"x\"}','${now}',\n` +
+    `  '${now}','${now}'\n` +
+    `);\n`,
   );
 
   await applyResult({

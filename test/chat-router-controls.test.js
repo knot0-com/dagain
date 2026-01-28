@@ -44,10 +44,10 @@ function runCliInteractive({ binPath, cwd, args, input }) {
 }
 
 test("chat router: executes control.pause op", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
   const mockRouterPath = fileURLToPath(new URL("../scripts/mock-chat-router.js", import.meta.url));
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-chat-router-controls-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-chat-router-controls-"));
 
   const initRes = await runCli({
     binPath,

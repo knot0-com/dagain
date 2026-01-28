@@ -4,7 +4,7 @@
 
 **Goal:** Rename the project from `taskgraph` to `dagain` (repo + npm package + primary CLI), while keeping backward-compatible CLI aliases and state-dir migration.
 
-**Architecture:** Make `dagain` the canonical name: npm package name, default CLI command, docs. Keep `taskgraph` + `choreo` as CLI aliases. Rename the canonical state directory to `.dagain/` and auto-migrate from legacy `.taskgraph/` and `.choreo/`, leaving symlinks for back-compat.
+**Architecture:** Make `dagain` the canonical name: npm package name, default CLI command, docs. Keep `taskgraph` + `dagain` as CLI aliases. Rename the canonical state directory to `.dagain/` and auto-migrate from legacy `.taskgraph/` and `.dagain/`, leaving symlinks for back-compat.
 
 **Tech Stack:** Node.js CLI (ESM), SQLite state, `node --test`, GitHub + npm.
 
@@ -31,7 +31,7 @@
 - Modify: `src/cli.js`
 - Modify: `scripts/shell-merge.js`
 
-**Step 1: Update `choreoPaths()`**
+**Step 1: Update `dagainPaths()`**
 - Set canonical dir to `.dagain/`.
 - Update default config paths:
   - Claude `TMPDIR`: `.dagain/tmp`
@@ -41,10 +41,10 @@
 - In `src/cli.js`, migrate in this order:
   1) If `.dagain/` exists: no-op
   2) Else if `.taskgraph/` exists: rename to `.dagain/` and symlink `.taskgraph -> .dagain`
-  3) Else if `.choreo/` exists: rename to `.dagain/` and symlink `.choreo -> .dagain` (and also symlink `.taskgraph -> .dagain`)
+  3) Else if `.dagain/` exists: rename to `.dagain/` and symlink `.dagain -> .dagain` (and also symlink `.taskgraph -> .dagain`)
 
 **Step 3: Update `scripts/shell-merge.js` config lookup**
-- Prefer `.dagain/config.json`, then `.taskgraph/config.json`, then `.choreo/config.json`.
+- Prefer `.dagain/config.json`, then `.taskgraph/config.json`, then `.dagain/config.json`.
 - Ensure git excludes both `.dagain/` and legacy dirs.
 
 **Step 4: Re-run the failing test**
@@ -59,7 +59,7 @@
 - Modify: `package.json`
 - Create: `bin/dagain.js`
 - Modify: `bin/taskgraph.js` (if needed)
-- Modify: `bin/choreo.js` (if needed)
+- Modify: `bin/dagain.js` (if needed)
 - Modify: `README.md`
 - Modify: `src/cli.js` (usage banner)
 
@@ -69,7 +69,7 @@
 - Keep `bin` aliases:
   - `dagain` → `bin/dagain.js` (primary)
   - `taskgraph` → existing entry (compat)
-  - `choreo` → existing entry (compat)
+  - `dagain` → existing entry (compat)
 
 **Step 2: Add `bin/dagain.js`**
 - Same behavior as other bins: import `src/cli.js` and call `main(process.argv.slice(2))`.
@@ -95,11 +95,11 @@
 
 **Step 1: Replace user-facing “taskgraph” branding**
 - README: project name, examples, install commands: `npx dagain`, `dagain run`, etc.
-- Keep note: `taskgraph` + `choreo` are aliases.
+- Keep note: `taskgraph` + `dagain` are aliases.
 
 **Step 2: Replace state-dir references**
 - `.taskgraph/` → `.dagain/` in docs/templates.
-- Mention auto-migration from `.taskgraph/` and `.choreo/`.
+- Mention auto-migration from `.taskgraph/` and `.dagain/`.
 
 **Step 3: Update ignore lists**
 - Ensure `.dagain/` is ignored in git + npm.

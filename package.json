@@ -5,8 +5,7 @@
   "type": "module",
   "bin": {
     "dagain": "bin/dagain.js",
-    "taskgraph": "bin/taskgraph.js",
-    "choreo": "bin/choreo.js"
+    "taskgraph": "bin/taskgraph.js"
   },
   "scripts": {
     "test": "node --test"

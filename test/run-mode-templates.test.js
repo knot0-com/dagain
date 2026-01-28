@@ -37,17 +37,17 @@ async function insertIntegrateNode({ dbPath, nodeId = "integrate-000" } = {}) {
   await sqliteExec(
     dbPath,
     `INSERT OR IGNORE INTO nodes(\n` +
-      `  id, title, type, status,\n` +
-      `  created_at, updated_at\n` +
-      `)\n` +
-      `VALUES(\n` +
-      `  ${sqlQuote(nodeId)},\n` +
-      `  'Integrate',\n` +
-      `  'integrate',\n` +
-      `  'open',\n` +
-      `  ${nowSql},\n` +
-      `  ${nowSql}\n` +
-      `);\n`,
+    `  id, title, type, status,\n` +
+    `  created_at, updated_at\n` +
+    `)\n` +
+    `VALUES(\n` +
+    `  ${sqlQuote(nodeId)},\n` +
+    `  'Integrate',\n` +
+    `  'integrate',\n` +
+    `  'open',\n` +
+    `  ${nowSql},\n` +
+    `  ${nowSql}\n` +
+    `);\n`,
   );
 }
 
@@ -57,26 +57,26 @@ async function insertFinalVerifyNode({ dbPath, nodeId = "final-verify-000" } = {
   await sqliteExec(
     dbPath,
     `INSERT OR IGNORE INTO nodes(\n` +
-      `  id, title, type, status,\n` +
-      `  created_at, updated_at\n` +
-      `)\n` +
-      `VALUES(\n` +
-      `  ${sqlQuote(nodeId)},\n` +
-      `  'Final verify',\n` +
-      `  'final_verify',\n` +
-      `  'open',\n` +
-      `  ${nowSql},\n` +
-      `  ${nowSql}\n` +
-      `);\n`,
+    `  id, title, type, status,\n` +
+    `  created_at, updated_at\n` +
+    `)\n` +
+    `VALUES(\n` +
+    `  ${sqlQuote(nodeId)},\n` +
+    `  'Final verify',\n` +
+    `  'final_verify',\n` +
+    `  'open',\n` +
+    `  ${nowSql},\n` +
+    `  ${nowSql}\n` +
+    `);\n`,
   );
 }
 
 async function setupProject({ goalText }) {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
   const dumpAgentPath = fileURLToPath(new URL("../scripts/mock-agent-packet-dump.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-run-mode-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-run-mode-"));
 
   const initRes = await runCli({
     binPath,
@@ -150,11 +150,11 @@ test("runMode=analysis: integrator template discourages redundant heavy exec", a
 });
 
 test("runMode=analysis: final verifier template discourages redundant heavy exec", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
   const dumpAgentPath = fileURLToPath(new URL("../scripts/mock-agent-packet-dump.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-run-mode-final-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-run-mode-final-"));
 
   const initRes = await runCli({
     binPath,

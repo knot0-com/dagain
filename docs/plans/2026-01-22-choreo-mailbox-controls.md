@@ -1,19 +1,19 @@
-# Choreo Mailbox Supervisor Controls Implementation Plan
+# Dagain Mailbox Supervisor Controls Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task.
 
-**Goal:** Add a DB-backed mailbox so `choreo chat` can control a running supervisor (pause/resume, set workers, replan now, cancel node) without signals.
+**Goal:** Add a DB-backed mailbox so `dagain chat` can control a running supervisor (pause/resume, set workers, replan now, cancel node) without signals.
 
-**Architecture:** Introduce a `mailbox` table in `.choreo/state.sqlite` that acts as a command queue. Chat (and a new `choreo control ...` CLI) enqueue commands. The supervisor runs a background poller that claims and acks commands, updates in-memory control state (paused, maxWorkers), and can cancel in-flight node runs via per-node abort controllers. Replan is implemented by reopening `plan-000` and pausing launches of non-planner nodes until the planner finishes.
+**Architecture:** Introduce a `mailbox` table in `.dagain/state.sqlite` that acts as a command queue. Chat (and a new `dagain control ...` CLI) enqueue commands. The supervisor runs a background poller that claims and acks commands, updates in-memory control state (paused, maxWorkers), and can cancel in-flight node runs via per-node abort controllers. Replan is implemented by reopening `plan-000` and pausing launches of non-planner nodes until the planner finishes.
 
-**Tech Stack:** Node.js (>=18), SQLite (`sqlite3` CLI), `node:test`, existing Choreo supervisor loop.
+**Tech Stack:** Node.js (>=18), SQLite (`sqlite3` CLI), `node:test`, existing Dagain supervisor loop.
 
 ---
 
 ## Success Metrics
 
-- `choreo control pause|resume|set-workers|replan|cancel` enqueues commands and prints an id.
-- A running `choreo run` responds to mailbox commands within ~250ms.
+- `dagain control pause|resume|set-workers|replan|cancel` enqueues commands and prints an id.
+- A running `dagain run` responds to mailbox commands within ~250ms.
 - `pause` stops *launching* new nodes (in-flight nodes complete); `resume` continues.
 - `set-workers` changes the maximum in-flight node runs without restart (downscale should prevent new spawns until below limit).
 - `cancel` aborts a specific in-flight node run and unlocks it back to `open`.
@@ -33,9 +33,9 @@
 **Step 1: Write failing test**
 
 Create `test/mailbox-migration.test.js`:
-- Init a tmp project (`choreo init --no-refine`).
+- Init a tmp project (`dagain init --no-refine`).
 - Simulate an old DB by dropping `mailbox`.
-- Run `choreo run --once --dry-run` to force migrations.
+- Run `dagain run --once --dry-run` to force migrations.
 - Assert `mailbox` table exists again.
 
 Run: `npm test -- test/mailbox-migration.test.js`  
@@ -80,7 +80,7 @@ Expected: PASS
 
 ---
 
-## Task 3: Add `choreo control` CLI wrapper
+## Task 3: Add `dagain control` CLI wrapper
 
 **Files:**
 - Modify: `src/cli.js`
@@ -90,8 +90,8 @@ Expected: PASS
 
 Create `test/control-cli.test.js`:
 - Init tmp project.
-- Run `choreo control pause` and assert a mailbox row exists with `command='pause'` and `status='pending'`.
-- Run `choreo control set-workers --workers 3` and assert args_json includes `{"workers":3}`.
+- Run `dagain control pause` and assert a mailbox row exists with `command='pause'` and `status='pending'`.
+- Run `dagain control set-workers --workers 3` and assert args_json includes `{"workers":3}`.
 
 Run: `npm test -- test/control-cli.test.js`  
 Expected: FAIL (command missing)
@@ -120,27 +120,27 @@ Create `test/mailbox-supervisor.test.js` with 3 scenarios (use `scripts/mock-sle
 
 1) **pause/resume gates scheduling**
 - Seed `plan-000=done`, add `task-a`, `task-b` open (sleep ~200ms).
-- Start `choreo run` in background (workers=1).
+- Start `dagain run` in background (workers=1).
 - Wait for `task-a` in_progress.
-- `choreo control pause`.
+- `dagain control pause`.
 - Wait `task-a` done, assert `task-b` stays `open` for ~300ms.
-- `choreo control resume`, await run exit 0.
+- `dagain control resume`, await run exit 0.
 
 2) **set-workers downscales concurrency**
 - Seed `plan-000=done`, add 3 tasks open (sleep ~300ms).
-- Start `choreo run --workers 2` in background.
-- Wait 2 tasks in_progress, then `choreo control set-workers --workers 1`.
+- Start `dagain run --workers 2` in background.
+- Wait 2 tasks in_progress, then `dagain control set-workers --workers 1`.
 - When 1 finishes, assert the 3rd task is still `open` until the 2nd finishes.
 
 3) **cancel aborts a running node**
 - Seed `plan-000=done`, add `task-long` open (sleep ~5000ms).
-- Start `choreo run` in background.
+- Start `dagain run` in background.
 - Wait `task-long` in_progress.
-- `choreo control pause` (prevents immediate restart)
-- `choreo control cancel --node task-long`
+- `dagain control pause` (prevents immediate restart)
+- `dagain control cancel --node task-long`
 - Assert node becomes `open` and `lock_run_id` clears quickly.
-- Mark node `done` via `choreo node set-status`.
-- `choreo control resume`, await run exits.
+- Mark node `done` via `dagain node set-status`.
+- `dagain control resume`, await run exits.
 
 Run: `npm test -- test/mailbox-supervisor.test.js`  
 Expected: FAIL (no mailbox behavior)
@@ -189,7 +189,7 @@ They should call `controlCommand(...)` internally.
 **Step 2: Test**
 
 Create `test/chat-controls.test.js`:
-- Init tmp project, run `choreo chat --no-llm` with piped stdin, send `/pause` then `/exit`.
+- Init tmp project, run `dagain chat --no-llm` with piped stdin, send `/pause` then `/exit`.
 - Assert it prints a confirmation and exits 0.
 
 Run: `npm test -- test/chat-controls.test.js`  

@@ -27,9 +27,9 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("control: pause enqueues mailbox command", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-control-pause-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-control-pause-"));
 
   const initRes = await runCli({
     binPath,
@@ -48,9 +48,9 @@ test("control: pause enqueues mailbox command", async () => {
 });
 
 test("control: set-workers stores args_json", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-control-workers-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-control-workers-"));
 
   const initRes = await runCli({
     binPath,

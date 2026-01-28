@@ -27,9 +27,9 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("migrate: ensureMailboxTable creates mailbox table", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-mailbox-migrate-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-mailbox-migrate-"));
 
   const initRes = await runCli({
     binPath,

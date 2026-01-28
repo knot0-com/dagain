@@ -1,12 +1,12 @@
-# Choreo Upstream Context + Status UX Implementation Plan
+# Dagain Upstream Context + Status UX Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Make Choreo runs faster and more reliable by (1) automatically feeding upstream node summaries into `integrate` / `final_verify` nodes, (2) tightening analysis-mode prompts to avoid redundant long-running commands (Codex tool timeouts), and (3) improving `choreo status` so users can see which node is running and where logs live.
+**Goal:** Make Dagain runs faster and more reliable by (1) automatically feeding upstream node summaries into `integrate` / `final_verify` nodes, (2) tightening analysis-mode prompts to avoid redundant long-running commands (Codex tool timeouts), and (3) improving `dagain status` so users can see which node is running and where logs live.
 
-**Architecture:** Keep `.choreo/state.sqlite` as the source of truth and `.choreo/workgraph.json` as the UX snapshot. Use `inputs_json` to store *references* to upstream KV keys (e.g. `<dep>:out.summary`) rather than copying large context. Render these refs in packets via the existing “Node Inputs” block. LLM roles (`integrator`, `finalVerifier`) should treat upstream `verify` nodes as the authoritative execution of expensive commands and should not re-run heavy scripts.
+**Architecture:** Keep `.dagain/state.sqlite` as the source of truth and `.dagain/workgraph.json` as the UX snapshot. Use `inputs_json` to store *references* to upstream KV keys (e.g. `<dep>:out.summary`) rather than copying large context. Render these refs in packets via the existing “Node Inputs” block. LLM roles (`integrator`, `finalVerifier`) should treat upstream `verify` nodes as the authoritative execution of expensive commands and should not re-run heavy scripts.
 
-**Tech Stack:** Node.js (`node --test`), SQLite (via existing helpers), Choreo CLI (`src/cli.js`), packet templates (`templates/*.md`)
+**Tech Stack:** Node.js (`node --test`), SQLite (via existing helpers), Dagain CLI (`src/cli.js`), packet templates (`templates/*.md`)
 
 ---
 
@@ -14,7 +14,7 @@
 
 - `integrate-000` and `final-verify-000` packets include upstream summaries in **`## Node Inputs`** by default (no “I think nothing ran” behavior).
 - Analysis-mode `integrator` no longer tries to rerun long commands that routinely exceed Codex exec timeouts; instead it relies on `verify-*` nodes (or proposes new verify nodes if needed).
-- `choreo status` shows **in-progress node(s)** with `runId` and the path to `stdout.log`.
+- `dagain status` shows **in-progress node(s)** with `runId` and the path to `stdout.log`.
 
 ---
 
@@ -27,10 +27,10 @@
 **Step 1: Write failing test**
 
 Create `test/scaffold-upstream-inputs.test.js`:
-- Create a temp choreo project (`choreo init --goal ... --no-refine --force`)
+- Create a temp dagain project (`dagain init --goal ... --no-refine --force`)
 - Use the existing tasks-only mock planner (`scripts/mock-planner-tasks-only.js`)
-- Run `choreo run` to completion with mock agents
-- Query `.choreo/state.sqlite` and assert:
+- Run `dagain run` to completion with mock agents
+- Query `.dagain/state.sqlite` and assert:
   - `integrate-000.inputs_json` contains refs to `task-hello:out.summary` **and** `verify-task-hello:out.summary`
   - `final-verify-000.inputs_json` contains a ref to `integrate-000:out.summary`
 
@@ -83,7 +83,7 @@ Expected: FAIL (strings missing)
 In `templates/integrator-analysis.md` and `templates/final-verifier-analysis.md`:
 - Add an explicit **“Long-running commands”** rule:
   - Treat upstream verify nodes as the canonical place for expensive execution
-  - Avoid rerunning heavy scripts; prefer reading artifacts and using `choreo kv get` for summaries
+  - Avoid rerunning heavy scripts; prefer reading artifacts and using `dagain kv get` for summaries
   - If execution is truly missing, propose a new `verify-*` node in `next.addNodes` (runner `shellVerify`)
 
 Run: `npm test -- test/run-mode-templates.test.js`
@@ -98,7 +98,7 @@ git commit -m "docs(templates): prevent integrator from rerunning heavy analysis
 
 ---
 
-### Task 3: Improve `choreo status` to show in-progress node(s) and log paths
+### Task 3: Improve `dagain status` to show in-progress node(s) and log paths
 
 **Files:**
 - Modify: `src/cli.js`
@@ -107,13 +107,13 @@ git commit -m "docs(templates): prevent integrator from rerunning heavy analysis
 **Step 1: Write failing test**
 
 Create `test/status-inprogress.test.js`:
-- Create a temp choreo project
+- Create a temp dagain project
 - Manually set a node to `in_progress` in sqlite with a `lock_run_id`
-- Run `choreo status`
+- Run `dagain status`
 - Assert output contains an “In progress” section with:
   - node id
   - run id
-  - `.choreo/runs/<runId>/stdout.log` path
+  - `.dagain/runs/<runId>/stdout.log` path
 
 Run: `npm test -- test/status-inprogress.test.js`
 Expected: FAIL (no in-progress section)
@@ -145,7 +145,7 @@ git commit -m "feat(status): show running nodes and log paths"
 
 ```bash
 cd /home/mojians/projects/alpha-0x8dxd
-node /home/mojians/projects/choreo/bin/choreo.js resume --workers 2 --interval-ms 0 --max-iterations 50 --no-live --no-color
+node /home/mojians/projects/dagain/bin/dagain.js resume --workers 2 --interval-ms 0 --max-iterations 50 --no-live --no-color
 ```
 
 Expected:

@@ -30,10 +30,10 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("run: auto-resets failed deps when graph is blocked", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-deadlock-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-deadlock-"));
 
   const initRes = await runCli({
     binPath,

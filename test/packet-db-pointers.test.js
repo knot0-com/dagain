@@ -28,11 +28,11 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("run: injects DB pointer env vars into runner", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
   const mockAgentPath = fileURLToPath(new URL("../scripts/mock-agent-env.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-db-pointers-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-db-pointers-"));
 
   const initRes = await runCli({
     binPath,
@@ -79,13 +79,12 @@ test("run: injects DB pointer env vars into runner", async () => {
 
   const envRecordPath = path.join(tmpDir, "runner_env.json");
   const envRecord = JSON.parse(await readFile(envRecordPath, "utf8"));
-  assert.equal(envRecord.CHOREO_DB, path.join(tmpDir, ".dagain", "state.sqlite"));
-  assert.equal(envRecord.CHOREO_NODE_ID, "plan-000");
-  assert.equal(envRecord.CHOREO_ARTIFACTS_DIR, path.join(tmpDir, ".dagain", "artifacts"));
-  assert.equal(envRecord.CHOREO_CHECKPOINTS_DIR, path.join(tmpDir, ".dagain", "checkpoints"));
-  assert.equal(envRecord.CHOREO_RUNS_DIR, path.join(tmpDir, ".dagain", "runs"));
-  assert.ok(typeof envRecord.CHOREO_RUN_ID === "string" && envRecord.CHOREO_RUN_ID.trim() !== "");
-  assert.ok(typeof envRecord.CHOREO_BIN === "string" && envRecord.CHOREO_BIN.endsWith(path.join("bin", "choreo.js")));
-  await stat(envRecord.CHOREO_BIN);
+  assert.equal(envRecord.DAGAIN_DB, path.join(tmpDir, ".dagain", "state.sqlite"));
+  assert.equal(envRecord.DAGAIN_NODE_ID, "plan-000");
+  assert.equal(envRecord.DAGAIN_ARTIFACTS_DIR, path.join(tmpDir, ".dagain", "artifacts"));
+  assert.equal(envRecord.DAGAIN_CHECKPOINTS_DIR, path.join(tmpDir, ".dagain", "checkpoints"));
+  assert.equal(envRecord.DAGAIN_RUNS_DIR, path.join(tmpDir, ".dagain", "runs"));
+  assert.ok(typeof envRecord.DAGAIN_RUN_ID === "string" && envRecord.DAGAIN_RUN_ID.trim() !== "");
+  assert.ok(typeof envRecord.DAGAIN_BIN === "string" && envRecord.DAGAIN_BIN.endsWith(path.join("bin", "dagain.js")));
+  await stat(envRecord.DAGAIN_BIN);
 });
-

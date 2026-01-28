@@ -7,14 +7,14 @@ function result(obj) {
 const marker = String(process.argv[2] || "").trim() || "env";
 const payload = {
   marker,
-  CHOREO_DB: String(process.env.CHOREO_DB || ""),
-  CHOREO_NODE_ID: String(process.env.CHOREO_NODE_ID || ""),
-  CHOREO_RUN_ID: String(process.env.CHOREO_RUN_ID || ""),
-  CHOREO_PARENT_NODE_ID: String(process.env.CHOREO_PARENT_NODE_ID || ""),
-  CHOREO_ARTIFACTS_DIR: String(process.env.CHOREO_ARTIFACTS_DIR || ""),
-  CHOREO_CHECKPOINTS_DIR: String(process.env.CHOREO_CHECKPOINTS_DIR || ""),
-  CHOREO_RUNS_DIR: String(process.env.CHOREO_RUNS_DIR || ""),
-  CHOREO_BIN: String(process.env.CHOREO_BIN || ""),
+  DAGAIN_DB: String(process.env.DAGAIN_DB || ""),
+  DAGAIN_NODE_ID: String(process.env.DAGAIN_NODE_ID || ""),
+  DAGAIN_RUN_ID: String(process.env.DAGAIN_RUN_ID || ""),
+  DAGAIN_PARENT_NODE_ID: String(process.env.DAGAIN_PARENT_NODE_ID || ""),
+  DAGAIN_ARTIFACTS_DIR: String(process.env.DAGAIN_ARTIFACTS_DIR || ""),
+  DAGAIN_CHECKPOINTS_DIR: String(process.env.DAGAIN_CHECKPOINTS_DIR || ""),
+  DAGAIN_RUNS_DIR: String(process.env.DAGAIN_RUNS_DIR || ""),
+  DAGAIN_BIN: String(process.env.DAGAIN_BIN || ""),
 };
 
 await fs.writeFile("runner_env.json", JSON.stringify(payload, null, 2) + "\n", "utf8");
@@ -32,4 +32,3 @@ result({
   errors: [],
   confidence: 1,
 });
-

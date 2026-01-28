@@ -50,9 +50,9 @@ function runCliInteractive({ binPath, cwd, args, input }) {
 }
 
 test("chat: starts repl and exits on /exit", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-chat-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-chat-"));
 
   const initRes = await runCli({
     binPath,

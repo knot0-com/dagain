@@ -52,9 +52,9 @@ function runCliInteractive({ binPath, cwd, args, env, input }) {
 }
 
 test("chat: non-tty default prints usage; force flag enters chat", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-chat-default-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-chat-default-"));
 
   const initRes = await runCli({
     binPath,
@@ -71,7 +71,7 @@ test("chat: non-tty default prints usage; force flag enters chat", async () => {
     binPath,
     cwd: tmpDir,
     args: [],
-    env: { CHOREO_FORCE_CHAT: "1" },
+    env: { DAGAIN_FORCE_CHAT: "1" },
     input: "/exit\n",
   });
   assert.equal(forced.code, 0, forced.stderr || forced.stdout);

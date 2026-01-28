@@ -1,22 +1,22 @@
 import path from "node:path";
 import { pathExists, readJson, writeJsonAtomic } from "./fs.js";
 
-export function choreoPaths(rootDir) {
-  const choreoDir = path.join(rootDir, ".dagain");
+export function dagainPaths(rootDir) {
+  const stateDir = path.join(rootDir, ".dagain");
   return {
     rootDir,
-    choreoDir,
-    configPath: path.join(choreoDir, "config.json"),
-    graphPath: path.join(choreoDir, "workgraph.json"),
-    graphSnapshotPath: path.join(choreoDir, "workgraph.json"),
-    dbPath: path.join(choreoDir, "state.sqlite"),
-    lockPath: path.join(choreoDir, "lock"),
-    checkpointsDir: path.join(choreoDir, "checkpoints"),
-    runsDir: path.join(choreoDir, "runs"),
-    artifactsDir: path.join(choreoDir, "artifacts"),
-    memoryDir: path.join(choreoDir, "memory"),
-    templatesDir: path.join(choreoDir, "templates"),
-    tmpDir: path.join(choreoDir, "tmp"),
+    stateDir,
+    configPath: path.join(stateDir, "config.json"),
+    graphPath: path.join(stateDir, "workgraph.json"),
+    graphSnapshotPath: path.join(stateDir, "workgraph.json"),
+    dbPath: path.join(stateDir, "state.sqlite"),
+    lockPath: path.join(stateDir, "lock"),
+    checkpointsDir: path.join(stateDir, "checkpoints"),
+    runsDir: path.join(stateDir, "runs"),
+    artifactsDir: path.join(stateDir, "artifacts"),
+    memoryDir: path.join(stateDir, "memory"),
+    templatesDir: path.join(stateDir, "templates"),
+    tmpDir: path.join(stateDir, "tmp"),
     goalPath: path.join(rootDir, "GOAL.md"),
   };
 }
@@ -30,12 +30,12 @@ export function defaultConfig() {
       mergeRunner: "shellMerge",
     },
     runners: {
-      shellVerify: { cmd: 'node "$CHOREO_SHELL_VERIFIER"' },
-      shellMerge: { cmd: 'node "$CHOREO_SHELL_MERGE"' },
+      shellVerify: { cmd: 'node "$DAGAIN_SHELL_VERIFIER"' },
+      shellMerge: { cmd: 'node "$DAGAIN_SHELL_MERGE"' },
       codex: { cmd: "codex exec --yolo --skip-git-repo-check -" },
       codexMedium: { cmd: "codex exec --yolo --skip-git-repo-check -m gpt-5.2-codex -c model_reasoning_effort=medium -" },
       // Note: Claude forbids --dangerously-skip-permissions when running as root/sudo.
-      // choreo strips that flag automatically in those contexts.
+      // dagain strips that flag automatically in those contexts.
       claude: {
         cmd: "claude --dangerously-skip-permissions -p \"$(cat {packet})\"",
         env: { TMPDIR: ".dagain/tmp" },

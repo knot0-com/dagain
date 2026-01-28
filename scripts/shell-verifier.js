@@ -55,8 +55,8 @@ function runShellCommand(cmd, { cwd }) {
 }
 
 async function main() {
-  const dbPath = String(process.env.CHOREO_DB || "").trim();
-  const nodeId = String(process.env.CHOREO_NODE_ID || "").trim();
+  const dbPath = String(process.env.DAGAIN_DB || "").trim();
+  const nodeId = String(process.env.DAGAIN_NODE_ID || "").trim();
 
   if (!dbPath || !nodeId) {
     result({
@@ -64,10 +64,10 @@ async function main() {
       role: "verifier",
       nodeId,
       status: "fail",
-      summary: "Missing $CHOREO_DB or $CHOREO_NODE_ID",
+      summary: "Missing $DAGAIN_DB or $DAGAIN_NODE_ID",
       next: { addNodes: [], setStatus: [] },
       checkpoint: null,
-      errors: ["Missing $CHOREO_DB or $CHOREO_NODE_ID"],
+      errors: ["Missing $DAGAIN_DB or $DAGAIN_NODE_ID"],
       confidence: 0,
     });
     return;
@@ -144,7 +144,7 @@ try {
   result({
     version: 1,
     role: "verifier",
-    nodeId: String(process.env.CHOREO_NODE_ID || "").trim(),
+    nodeId: String(process.env.DAGAIN_NODE_ID || "").trim(),
     status: "fail",
     summary: msg,
     next: { addNodes: [], setStatus: [] },
@@ -153,4 +153,3 @@ try {
     confidence: 0,
   });
 }
-

@@ -31,9 +31,9 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("claimNode: only one claim succeeds", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-claim-node-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-claim-node-"));
 
   const initRes = await runCli({
     binPath,
@@ -47,8 +47,8 @@ test("claimNode: only one claim succeeds", async () => {
   await sqliteExec(
     dbPath,
     `DELETE FROM deps;\n` +
-      `DELETE FROM nodes;\n` +
-      `INSERT INTO nodes(id, title, type, status, created_at, updated_at) VALUES('a','a','task','open','${now}','${now}');\n`,
+    `DELETE FROM nodes;\n` +
+    `INSERT INTO nodes(id, title, type, status, created_at, updated_at) VALUES('a','a','task','open','${now}','${now}');\n`,
   );
 
   const ok1 = await claimNode({ dbPath, nodeId: "a", runId: "run-1", pid: 123, host: "host", nowIso: new Date().toISOString() });

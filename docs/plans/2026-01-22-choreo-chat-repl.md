@@ -1,10 +1,10 @@
-# Choreo Chat REPL (Codex-first) Implementation Plan
+# Dagain Chat REPL (Codex-first) Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task.
 
-**Goal:** Add a human-facing chat REPL (`choreo chat`) and make `choreo` (no args) drop into chat when stdin/stdout are TTY. Chat should support natural-language steering, status checks, and replanning ergonomics, without letting runners write directly to `nodes/deps`.
+**Goal:** Add a human-facing chat REPL (`dagain chat`) and make `dagain` (no args) drop into chat when stdin/stdout are TTY. Chat should support natural-language steering, status checks, and replanning ergonomics, without letting runners write directly to `nodes/deps`.
 
-**Architecture:** Implement `choreo chat` as a readline REPL. Built-in slash commands handle common operations without LLM (`/status`, `/run`, `/stop`, `/exit`). For natural language messages, call a Codex microcall that returns structured “ops” (add node / set status / kv get/put) and an assistant reply; Choreo executes ops (single-writer) and prints results. Add a `choreo node ...` command for ergonomic, safe graph edits (idempotent SQL, transactions, guardrails).
+**Architecture:** Implement `dagain chat` as a readline REPL. Built-in slash commands handle common operations without LLM (`/status`, `/run`, `/stop`, `/exit`). For natural language messages, call a Codex microcall that returns structured “ops” (add node / set status / kv get/put) and an assistant reply; Dagain executes ops (single-writer) and prints results. Add a `dagain node ...` command for ergonomic, safe graph edits (idempotent SQL, transactions, guardrails).
 
 **Tech Stack:** Node.js (>=18), SQLite (`sqlite3` CLI), `node:test`
 
@@ -12,14 +12,14 @@
 
 ## Success Metrics
 
-- `choreo chat` starts a REPL and exits cleanly on `/exit` (non-TTY friendly for scripting/tests).
-- `choreo` (no args) enters chat only when stdin+stdout are TTY; otherwise prints usage and exits (no hanging in CI).
-- Humans can add tasks and change node status without raw SQL via `choreo node ...` or via chat NL.
+- `dagain chat` starts a REPL and exits cleanly on `/exit` (non-TTY friendly for scripting/tests).
+- `dagain` (no args) enters chat only when stdin+stdout are TTY; otherwise prints usage and exits (no hanging in CI).
+- Humans can add tasks and change node status without raw SQL via `dagain node ...` or via chat NL.
 - Operations are idempotent and safe under concurrency (`--workers > 1`): use transactions + `INSERT OR IGNORE`.
 
 ---
 
-## Task 1: Add `choreo chat` command skeleton + tests (REPL only)
+## Task 1: Add `dagain chat` command skeleton + tests (REPL only)
 
 **Files:**
 - Create: `test/chat-repl.test.js`
@@ -28,9 +28,9 @@
 **Step 1: Write failing test**
 
 Create `test/chat-repl.test.js`:
-- Create tmp dir, run `choreo init --goal X --no-refine`.
-- Spawn `node bin/choreo.js chat` with stdin pipe.
-- Write `/status\n/exit\n` and assert exit code 0 and output contains `choreo chat` or a prompt banner.
+- Create tmp dir, run `dagain init --goal X --no-refine`.
+- Spawn `node bin/dagain.js chat` with stdin pipe.
+- Write `/status\n/exit\n` and assert exit code 0 and output contains `dagain chat` or a prompt banner.
 
 Run: `npm test -- test/chat-repl.test.js`  
 Expected: FAIL (command missing)
@@ -50,7 +50,7 @@ Expected: PASS
 
 ---
 
-## Task 2: Make `choreo` (no args) enter chat when TTY (guarded)
+## Task 2: Make `dagain` (no args) enter chat when TTY (guarded)
 
 **Files:**
 - Modify: `src/cli.js`
@@ -59,7 +59,7 @@ Expected: PASS
 **Step 1: Write failing test**
 
 Create `test/chat-default-tty-guard.test.js`:
-- Spawn `node bin/choreo.js` with no args in non-TTY (pipes).
+- Spawn `node bin/dagain.js` with no args in non-TTY (pipes).
 - Assert it prints usage and exits (does not hang).
 
 Run: `npm test -- test/chat-default-tty-guard.test.js`  
@@ -70,14 +70,14 @@ Expected: FAIL (after we switch default behavior without guard)
 In `main()`:
 - If no `command` and tty: call `chatCommand(...)`.
 - If no `command` and non-tty: print usage.
-- Keep `choreo <goal...>` behavior for unknown commands (implicit goal string).
+- Keep `dagain <goal...>` behavior for unknown commands (implicit goal string).
 
 Run: `npm test -- test/chat-default-tty-guard.test.js`  
 Expected: PASS
 
 ---
 
-## Task 3: Add `choreo node` ergonomic graph operations (add, set-status)
+## Task 3: Add `dagain node` ergonomic graph operations (add, set-status)
 
 **Files:**
 - Modify: `src/cli.js`
@@ -87,9 +87,9 @@ Expected: PASS
 
 Create `test/node-cli.test.js`:
 - Init tmp project.
-- Run: `choreo node add --id task-001 --title "T" --type task --parent plan-000`
+- Run: `dagain node add --id task-001 --title "T" --type task --parent plan-000`
 - Assert node exists in sqlite with expected fields.
-- Run: `choreo node set-status --id task-001 --status done`
+- Run: `dagain node set-status --id task-001 --status done`
 - Assert node status updated.
 
 Run: `npm test -- test/node-cli.test.js`  
@@ -126,7 +126,7 @@ Chat supports:
 
 **Step 2: Tests**
 
-Add a test that runs `choreo chat --no-llm` and sends a free-form line + `/exit`, asserting it exits and prints a fallback message.
+Add a test that runs `dagain chat --no-llm` and sends a free-form line + `/exit`, asserting it exits and prints a fallback message.
 
 ---
 

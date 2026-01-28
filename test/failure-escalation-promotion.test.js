@@ -31,9 +31,9 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("applyResult: failing escalation node promotes to parent plan", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-escalation-promote-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-escalation-promote-"));
 
   const initRes = await runCli({
     binPath,
@@ -47,12 +47,12 @@ test("applyResult: failing escalation node promotes to parent plan", async () =>
   await sqliteExec(
     dbPath,
     `DELETE FROM deps;\n` +
-      `DELETE FROM nodes;\n` +
-      `INSERT INTO nodes(id, title, type, status, parent_id, retry_policy_json, created_at, updated_at)\n` +
-      `VALUES\n` +
-      `  ('plan-root','root','plan','open',NULL,'{\"maxAttempts\":1}','${now}','${now}'),\n` +
-      `  ('plan-child','child','plan','open','plan-root','{\"maxAttempts\":1}','${now}','${now}'),\n` +
-      `  ('plan-escalate-plan-child','Escalate plan-child','plan','open','plan-root','{\"maxAttempts\":1}','${now}','${now}');\n`,
+    `DELETE FROM nodes;\n` +
+    `INSERT INTO nodes(id, title, type, status, parent_id, retry_policy_json, created_at, updated_at)\n` +
+    `VALUES\n` +
+    `  ('plan-root','root','plan','open',NULL,'{\"maxAttempts\":1}','${now}','${now}'),\n` +
+    `  ('plan-child','child','plan','open','plan-root','{\"maxAttempts\":1}','${now}','${now}'),\n` +
+    `  ('plan-escalate-plan-child','Escalate plan-child','plan','open','plan-root','{\"maxAttempts\":1}','${now}','${now}');\n`,
   );
 
   await applyResult({
@@ -81,9 +81,9 @@ test("applyResult: failing escalation node promotes to parent plan", async () =>
 });
 
 test("applyResult: failing root escalation does not nest escalation nodes", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-escalation-root-stop-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-escalation-root-stop-"));
 
   const initRes = await runCli({
     binPath,
@@ -97,11 +97,11 @@ test("applyResult: failing root escalation does not nest escalation nodes", asyn
   await sqliteExec(
     dbPath,
     `DELETE FROM deps;\n` +
-      `DELETE FROM nodes;\n` +
-      `INSERT INTO nodes(id, title, type, status, parent_id, retry_policy_json, created_at, updated_at)\n` +
-      `VALUES\n` +
-      `  ('plan-root','root','plan','open',NULL,'{\"maxAttempts\":1}','${now}','${now}'),\n` +
-      `  ('plan-escalate-plan-root','Escalate plan-root','plan','open',NULL,'{\"maxAttempts\":1}','${now}','${now}');\n`,
+    `DELETE FROM nodes;\n` +
+    `INSERT INTO nodes(id, title, type, status, parent_id, retry_policy_json, created_at, updated_at)\n` +
+    `VALUES\n` +
+    `  ('plan-root','root','plan','open',NULL,'{\"maxAttempts\":1}','${now}','${now}'),\n` +
+    `  ('plan-escalate-plan-root','Escalate plan-root','plan','open',NULL,'{\"maxAttempts\":1}','${now}','${now}');\n`,
   );
 
   await applyResult({

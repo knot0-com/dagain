@@ -29,11 +29,11 @@ function runCli({ binPath, cwd, args, env }) {
 }
 
 test("run: workers>1 dispatches multiple executors before first exit", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
   const mockAgentPath = fileURLToPath(new URL("../scripts/mock-sleep-agent.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-workers-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-workers-"));
 
   const initRes = await runCli({
     binPath,

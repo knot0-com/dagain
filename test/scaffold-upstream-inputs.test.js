@@ -30,12 +30,12 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("scaffolding: integrate/final nodes include upstream summary inputs", { timeout: 15_000 }, async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
   const plannerPath = fileURLToPath(new URL("../scripts/mock-planner-tasks-only.js", import.meta.url));
   const logAgentPath = fileURLToPath(new URL("../scripts/mock-agent-log.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-upstream-inputs-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-upstream-inputs-"));
 
   const initRes = await runCli({
     binPath,
@@ -97,4 +97,3 @@ test("scaffolding: integrate/final nodes include upstream summary inputs", { tim
   const finalRefs = new Set(finalInputs.map((s) => `${s.nodeId}:${s.key}`));
   assert.ok(finalRefs.has("integrate-000:out.summary"));
 });
-

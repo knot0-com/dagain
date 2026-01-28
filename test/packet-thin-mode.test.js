@@ -39,29 +39,29 @@ async function insertTaskNode({ dbPath, nodeId = "task-001" } = {}) {
   await sqliteExec(
     dbPath,
     `INSERT OR IGNORE INTO nodes(\n` +
-      `  id, title, type, status,\n` +
-      `  verify_json, retry_policy_json,\n` +
-      `  created_at, updated_at\n` +
-      `)\n` +
-      `VALUES(\n` +
-      `  ${sqlQuote(nodeId)},\n` +
-      `  'Task for packet test',\n` +
-      `  'task',\n` +
-      `  'open',\n` +
-      `  '${verify}',\n` +
-      `  '${retryPolicy}',\n` +
-      `  ${nowSql},\n` +
-      `  ${nowSql}\n` +
-      `);\n`,
+    `  id, title, type, status,\n` +
+    `  verify_json, retry_policy_json,\n` +
+    `  created_at, updated_at\n` +
+    `)\n` +
+    `VALUES(\n` +
+    `  ${sqlQuote(nodeId)},\n` +
+    `  'Task for packet test',\n` +
+    `  'task',\n` +
+    `  'open',\n` +
+    `  '${verify}',\n` +
+    `  '${retryPolicy}',\n` +
+    `  ${nowSql},\n` +
+    `  ${nowSql}\n` +
+    `);\n`,
   );
 }
 
 async function setupProject({ packetMode }) {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
   const dumpAgentPath = fileURLToPath(new URL("../scripts/mock-agent-packet-dump.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-packet-thin-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-packet-thin-"));
 
   const initRes = await runCli({
     binPath,

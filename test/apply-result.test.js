@@ -31,9 +31,9 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("applyResult: success marks node done and inserts new nodes/deps", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-apply-result-"));
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-apply-result-"));
 
   const initRes = await runCli({
     binPath,
@@ -93,4 +93,3 @@ test("applyResult: success marks node done and inserts new nodes/deps", async ()
   const deps = await sqliteJson(dbPath, "SELECT node_id, depends_on_id FROM deps WHERE node_id='b' AND depends_on_id='a';");
   assert.equal(deps.length, 1);
 });
-

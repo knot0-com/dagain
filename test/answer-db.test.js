@@ -30,10 +30,10 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("answer: updates sqlite state and reopens node", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-answer-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-answer-"));
 
   const initRes = await runCli({
     binPath,
@@ -116,4 +116,3 @@ test("answer: updates sqlite state and reopens node", async () => {
   const answered = (snapshot.nodes || []).find((n) => n.id === "task-ask");
   assert.equal(answered?.status, "open");
 });
-

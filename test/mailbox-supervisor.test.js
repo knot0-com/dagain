@@ -61,16 +61,16 @@ async function seedDonePlan(dbPath) {
   await sqliteExec(
     dbPath,
     `UPDATE nodes\n` +
-      `SET status='done',\n` +
-      `    attempts=0,\n` +
-      `    checkpoint_json=NULL,\n` +
-      `    lock_run_id=NULL,\n` +
-      `    lock_started_at=NULL,\n` +
-      `    lock_pid=NULL,\n` +
-      `    lock_host=NULL,\n` +
-      `    completed_at='${now.replace(/'/g, "''")}',\n` +
-      `    updated_at='${now.replace(/'/g, "''")}'\n` +
-      `WHERE id='plan-000';\n`,
+    `SET status='done',\n` +
+    `    attempts=0,\n` +
+    `    checkpoint_json=NULL,\n` +
+    `    lock_run_id=NULL,\n` +
+    `    lock_started_at=NULL,\n` +
+    `    lock_pid=NULL,\n` +
+    `    lock_host=NULL,\n` +
+    `    completed_at='${now.replace(/'/g, "''")}',\n` +
+    `    updated_at='${now.replace(/'/g, "''")}'\n` +
+    `WHERE id='plan-000';\n`,
   );
 }
 
@@ -83,17 +83,17 @@ async function seedTask(dbPath, { id, title, ownership, retryPolicy = { maxAttem
   await sqliteExec(
     dbPath,
     `INSERT OR REPLACE INTO nodes(\n` +
-      `  id, title, type, status,\n` +
-      `  runner, inputs_json, ownership_json, acceptance_json, verify_json,\n` +
-      `  retry_policy_json, attempts,\n` +
-      `  created_at, updated_at\n` +
-      `)\n` +
-      `VALUES(\n` +
-      `  ${idSql}, ${titleSql}, 'task', 'open',\n` +
-      `  NULL, '[]', '${ownershipJson.replace(/'/g, "''")}', '[]', '[]',\n` +
-      `  '${retryPolicyJson.replace(/'/g, "''")}', 0,\n` +
-      `  '${now.replace(/'/g, "''")}', '${now.replace(/'/g, "''")}'\n` +
-      `);\n`,
+    `  id, title, type, status,\n` +
+    `  runner, inputs_json, ownership_json, acceptance_json, verify_json,\n` +
+    `  retry_policy_json, attempts,\n` +
+    `  created_at, updated_at\n` +
+    `)\n` +
+    `VALUES(\n` +
+    `  ${idSql}, ${titleSql}, 'task', 'open',\n` +
+    `  NULL, '[]', '${ownershipJson.replace(/'/g, "''")}', '[]', '[]',\n` +
+    `  '${retryPolicyJson.replace(/'/g, "''")}', 0,\n` +
+    `  '${now.replace(/'/g, "''")}', '${now.replace(/'/g, "''")}'\n` +
+    `);\n`,
   );
 }
 
@@ -102,11 +102,11 @@ function nodeStatus(rows, id) {
 }
 
 test("mailbox: pause/resume gates scheduling", { timeout: 20_000 }, async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
   const mockSleepAgentPath = fileURLToPath(new URL("../scripts/mock-sleep-agent.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-mailbox-pause-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-mailbox-pause-"));
   const initRes = await runCli({
     binPath,
     cwd: tmpDir,
@@ -187,11 +187,11 @@ test("mailbox: pause/resume gates scheduling", { timeout: 20_000 }, async () => 
 });
 
 test("mailbox: set-workers downscales concurrency", { timeout: 25_000 }, async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
   const mockSleepAgentPath = fileURLToPath(new URL("../scripts/mock-sleep-agent.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-mailbox-workers-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-mailbox-workers-"));
   const initRes = await runCli({
     binPath,
     cwd: tmpDir,
@@ -276,11 +276,11 @@ test("mailbox: set-workers downscales concurrency", { timeout: 25_000 }, async (
 });
 
 test("mailbox: cancel aborts a running node", { timeout: 25_000 }, async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
   const mockSleepAgentPath = fileURLToPath(new URL("../scripts/mock-sleep-agent.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-mailbox-cancel-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-mailbox-cancel-"));
   const initRes = await runCli({
     binPath,
     cwd: tmpDir,
@@ -372,11 +372,11 @@ test("mailbox: cancel aborts a running node", { timeout: 25_000 }, async () => {
 });
 
 test("mailbox: replan pauses non-planner until plan completes", { timeout: 25_000 }, async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
   const mockSleepAgentPath = fileURLToPath(new URL("../scripts/mock-sleep-agent.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-mailbox-replan-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-mailbox-replan-"));
   const initRes = await runCli({
     binPath,
     cwd: tmpDir,

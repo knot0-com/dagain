@@ -30,9 +30,9 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("node: add and set-status", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-node-cli-"));
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-node-cli-"));
 
   const initRes = await runCli({
     binPath,
@@ -84,4 +84,3 @@ test("node: add and set-status", async () => {
   const updated = await sqliteJson(dbPath, "SELECT status FROM nodes WHERE id='task-001';");
   assert.equal(updated[0]?.status, "done");
 });
-

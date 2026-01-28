@@ -1,4 +1,4 @@
-# Choreo Packet — Microcall
+# Dagain Packet — Microcall
 
 You are a microcall helper. You must not run tools/commands or modify files. Think only and return structured JSON.
 
@@ -19,4 +19,3 @@ You are a microcall helper. You must not run tools/commands or modify files. Thi
   "data": {}
 }
 ```
-

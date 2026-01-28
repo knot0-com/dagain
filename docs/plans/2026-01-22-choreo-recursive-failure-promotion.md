@@ -1,4 +1,4 @@
-# Choreo Recursive Failure Promotion (Replan to Root) Implementation Plan
+# Dagain Recursive Failure Promotion (Replan to Root) Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task.
 
@@ -60,14 +60,14 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("applyResult: leaf failure escalates to nearest plan scope", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-escalation-scope-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-escalation-scope-"));
 
   const initRes = await runCli({ binPath, cwd: tmpDir, args: ["init", "--goal", "X", "--no-refine", "--force", "--no-color"] });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
-  const dbPath = path.join(tmpDir, ".choreo", "state.sqlite");
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
   const now = new Date().toISOString().replace(/'/g, "''");
   await sqliteExec(
     dbPath,

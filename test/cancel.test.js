@@ -61,11 +61,11 @@ async function waitFor(predicate, { timeoutMs = 3000, intervalMs = 50 } = {}) {
 }
 
 test("cancel: SIGTERM unlocks node and clears supervisor lock", { timeout: 10_000 }, async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
   const sleepAgentPath = fileURLToPath(new URL("../scripts/sleep-agent.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-cancel-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-cancel-"));
 
   const initRes = await runCli({
     binPath,
@@ -141,12 +141,12 @@ test("cancel: SIGTERM unlocks node and clears supervisor lock", { timeout: 10_00
   }
 });
 
-test("stop: choreo stop signals a running supervisor", { timeout: 10_000 }, async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+test("stop: dagain stop signals a running supervisor", { timeout: 10_000 }, async () => {
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
   const sleepAgentPath = fileURLToPath(new URL("../scripts/sleep-agent.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-stop-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-stop-"));
 
   const initRes = await runCli({
     binPath,
@@ -221,4 +221,3 @@ test("stop: choreo stop signals a running supervisor", { timeout: 10_000 }, asyn
     }
   }
 });
-

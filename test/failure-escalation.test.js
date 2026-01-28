@@ -31,9 +31,9 @@ function runCli({ binPath, cwd, args }) {
 }
 
 test("applyResult: permanent failure creates escalation node once", async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-escalation-"));
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-escalation-"));
 
   const initRes = await runCli({
     binPath,
@@ -47,9 +47,9 @@ test("applyResult: permanent failure creates escalation node once", async () => 
   await sqliteExec(
     dbPath,
     `DELETE FROM deps;\n` +
-      `DELETE FROM nodes;\n` +
-      `INSERT INTO nodes(id, title, type, status, retry_policy_json, created_at, updated_at)\n` +
-      `VALUES('a','a','task','open','{\"maxAttempts\":1}','${now}','${now}');\n`,
+    `DELETE FROM nodes;\n` +
+    `INSERT INTO nodes(id, title, type, status, retry_policy_json, created_at, updated_at)\n` +
+    `VALUES('a','a','task','open','{\"maxAttempts\":1}','${now}','${now}');\n`,
   );
 
   await applyResult({

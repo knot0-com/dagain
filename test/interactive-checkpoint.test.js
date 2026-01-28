@@ -31,11 +31,11 @@ function runCli({ binPath, cwd, args, env = {}, stdin = "" }) {
 }
 
 test("run: interactive checkpoint answer resumes and completes", { timeout: 10_000 }, async () => {
-  const choreoRoot = fileURLToPath(new URL("..", import.meta.url));
-  const binPath = path.join(choreoRoot, "bin", "choreo.js");
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
   const mockAgentPath = fileURLToPath(new URL("../scripts/mock-agent-checkpoint.js", import.meta.url));
 
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-checkpoint-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-checkpoint-"));
 
   const initRes = await runCli({
     binPath,
@@ -81,7 +81,7 @@ test("run: interactive checkpoint answer resumes and completes", { timeout: 10_0
     binPath,
     cwd: tmpDir,
     args: ["run", "--max-iterations", "50", "--interval-ms", "0", "--no-live", "--no-color"],
-    env: { CHOREO_FORCE_PROMPT: "1" },
+    env: { DAGAIN_FORCE_PROMPT: "1" },
     stdin: "yes\n",
   });
   assert.equal(runRes.code, 0, runRes.stderr || runRes.stdout);

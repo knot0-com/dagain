@@ -15,16 +15,16 @@ function normalizeDefault(value) {
 }
 
 test("ensureDepsRequiredStatusColumn: adds deps.required_status with default done", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-migrate-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-migrate-"));
   const dbPath = path.join(tmpDir, "state.sqlite");
 
   await sqliteExec(
     dbPath,
     `CREATE TABLE deps (\n` +
-      `  node_id TEXT NOT NULL,\n` +
-      `  depends_on_id TEXT NOT NULL,\n` +
-      `  PRIMARY KEY(node_id, depends_on_id)\n` +
-      `);\n`,
+    `  node_id TEXT NOT NULL,\n` +
+    `  depends_on_id TEXT NOT NULL,\n` +
+    `  PRIMARY KEY(node_id, depends_on_id)\n` +
+    `);\n`,
   );
 
   const first = await ensureDepsRequiredStatusColumn({ dbPath });

@@ -40,7 +40,7 @@ if (role === "planner") {
           status: "open",
           dependsOn: [],
           ownership: ["hello.txt"],
-          acceptance: ["Creates hello.txt containing exactly: hello from choreo"],
+          acceptance: ["Creates hello.txt containing exactly: hello from dagain"],
           verify: ["cat hello.txt"],
           retryPolicy: { maxAttempts: 1 },
         },
@@ -64,7 +64,7 @@ if (role === "planner") {
   });
 } else if (role === "executor") {
   const target = path.join(cwd, "hello.txt");
-  await fs.writeFile(target, "hello from choreo\n", "utf8");
+  await fs.writeFile(target, "hello from dagain\n", "utf8");
   result({
     version: 1,
     role: "executor",
@@ -85,7 +85,7 @@ if (role === "planner") {
   let content = "";
   try {
     content = await fs.readFile(target, "utf8");
-    ok = content.trimEnd() === "hello from choreo";
+    ok = content.trimEnd() === "hello from dagain";
   } catch {
     ok = false;
   }

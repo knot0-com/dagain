@@ -9,7 +9,7 @@ import { runRunnerCommand } from "../src/lib/runner.js";
 const canSetIds = typeof process.getuid === "function" && process.getuid() === 0 && process.platform !== "win32";
 
 async function setupTmp() {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "choreo-runner-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-runner-"));
   const packetPath = path.join(tmpDir, "packet.md");
   await writeFile(packetPath, "packet", "utf8");
   return { tmpDir, packetPath };
@@ -49,7 +49,7 @@ test(
       gid: 0,
     });
     const rootLog = await readFile(rootLogPath, "utf8");
-    assert.match(rootLog, /\[choreo\] cmd: echo hi(\n|$)/);
+    assert.match(rootLog, /\[dagain\] cmd: echo hi(\n|$)/);
     assert.doesNotMatch(rootLog, /--dangerously-skip-permissions/);
 
     const userLogPath = path.join(tmpDir, "user.log");
@@ -65,4 +65,3 @@ test(
     assert.match(userLog, /--dangerously-skip-permissions/);
   },
 );
-

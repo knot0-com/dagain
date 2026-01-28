@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan.
 
-**Goal:** Rename Taskgraph’s state directory from `.choreo/` to `.taskgraph/` and update all references (tests, docs, scripts) while keeping the test suite green.
+**Goal:** Rename Taskgraph’s state directory from `.dagain/` to `.taskgraph/` and update all references (tests, docs, scripts) while keeping the test suite green.
 
-**Architecture:** `choreoPaths()` becomes the single source of truth for state paths, pointing at `.taskgraph/`. CLI strings/tests/docs/scripts stop hardcoding `.choreo/`. (Optional back-compat) If a legacy `.choreo/` exists, migrate it to `.taskgraph/` and leave a `.choreo` symlink for old path references.
+**Architecture:** `dagainPaths()` becomes the single source of truth for state paths, pointing at `.taskgraph/`. CLI strings/tests/docs/scripts stop hardcoding `.dagain/`. (Optional back-compat) If a legacy `.dagain/` exists, migrate it to `.taskgraph/` and leave a `.dagain` symlink for old path references.
 
 **Tech Stack:** Node.js CLI, SQLite, `node:test`.
 
@@ -25,7 +25,7 @@
 - Expected: FAIL until code switches default dir.
 
 **Step 3: Implement minimal code**
-- Update `src/lib/config.js` `choreoPaths()` to use `.taskgraph`.
+- Update `src/lib/config.js` `dagainPaths()` to use `.taskgraph`.
 
 **Step 4: Run test to verify it passes**
 - Run: `npm test -- test/state-dir-taskgraph.test.js`
@@ -33,23 +33,23 @@
 
 ---
 
-### Task 2: Replace hardcoded `.choreo` references in CLI + scripts
+### Task 2: Replace hardcoded `.dagain` references in CLI + scripts
 
 **Files:**
 - Modify: `src/cli.js`
 - Modify: `scripts/shell-merge.js`
-- Modify: `scripts/shell-verifier.js` (only if it prints/assumes `.choreo`)
+- Modify: `scripts/shell-verifier.js` (only if it prints/assumes `.dagain`)
 
 **Step 1: Update user-facing strings**
 - Update usage “State:” section to `.taskgraph/...`.
-- Update error messages that mention `.choreo/*` to `.taskgraph/*`.
-- Update comments that mention `.choreo/tmp` to `.taskgraph/tmp`.
+- Update error messages that mention `.dagain/*` to `.taskgraph/*`.
+- Update comments that mention `.dagain/tmp` to `.taskgraph/tmp`.
 
 **Step 2 (Optional back-compat): Migrate legacy dir**
 - Add a small helper invoked early in `main()`:
-  - If `.choreo/` exists and `.taskgraph/` does not:
-    - `rename(".choreo", ".taskgraph")`
-    - best-effort create symlink `.choreo -> .taskgraph`
+  - If `.dagain/` exists and `.taskgraph/` does not:
+    - `rename(".dagain", ".taskgraph")`
+    - best-effort create symlink `.dagain -> .taskgraph`
   - If migration fails, print a warning and continue (do not crash `--help`).
 
 **Step 3: Run targeted tests**
@@ -60,13 +60,13 @@
 ### Task 3: Update tests to use `.taskgraph`
 
 **Files:**
-- Modify: `test/*.test.js` (all `.choreo` path joins and assertions)
+- Modify: `test/*.test.js` (all `.dagain` path joins and assertions)
 
-**Step 1: Replace `.choreo` → `.taskgraph`**
+**Step 1: Replace `.dagain` → `.taskgraph`**
 - Update all temp-dir path construction:
   - `path.join(tmpDir, ".taskgraph", ...)`
 - Update assertions for stored relative paths:
-  - `.taskgraph/runs/...` instead of `.choreo/runs/...`
+  - `.taskgraph/runs/...` instead of `.dagain/runs/...`
 - Update any config defaults in tests:
   - worktrees dir `.taskgraph/worktrees`
 
@@ -80,13 +80,13 @@
 
 **Files:**
 - Modify: `README.md`
-- Modify: `docs/fast-config.md` (if it references `.choreo`)
+- Modify: `docs/fast-config.md` (if it references `.dagain`)
 - Modify: `.gitignore`
 - Modify: `.npmignore`
 
-**Step 1: Replace `.choreo` → `.taskgraph`**
+**Step 1: Replace `.dagain` → `.taskgraph`**
 - README Quickstart + State layout sections.
-- If back-compat migration is implemented, mention `.choreo` as legacy/symlink.
+- If back-compat migration is implemented, mention `.dagain` as legacy/symlink.
 
 **Step 2: Verify packaging ignores**
 - Ensure `.taskgraph/` is excluded from git + npm publishing.
@@ -101,7 +101,7 @@
 **Step 2: Commit**
 ```bash
 git add -A
-git commit -m "refactor(state): rename .choreo to .taskgraph"
+git commit -m "refactor(state): rename .dagain to .taskgraph"
 ```
 
 **Step 3: Merge**

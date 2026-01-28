@@ -19,7 +19,7 @@ This profile minimizes full LLM invocations (especially verification) and reduce
     "verifyRunner": "shellVerify"
   },
   "runners": {
-    "shellVerify": { "cmd": "node \"$CHOREO_SHELL_VERIFIER\"" },
+    "shellVerify": { "cmd": "node \"$DAGAIN_SHELL_VERIFIER\"" },
     "codex": { "cmd": "codex exec --yolo --skip-git-repo-check -" }
   },
   "roles": {
