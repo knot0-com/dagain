@@ -2,6 +2,7 @@
 .taskgraph/
 .choreo/
 .worktrees/
+.github/
 
 *.tgz
 GOAL.md

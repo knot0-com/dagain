@@ -161,6 +161,27 @@ Then transfer via GitHub UI: **Settings → General → Transfer ownership**.
 
 ### npm + npx
 
+#### Automated publish (recommended)
+
+Publishing is automated via GitHub Actions on version tags (`vX.Y.Z`). The tag must match `package.json.version`.
+
+1) Configure npm Trusted Publishing (OIDC) for `knot0-com/dagain` and workflow filename `npm-publish.yml` (npmjs.com → package Settings → Trusted Publisher).
+
+2) Cut a release:
+
+```bash
+npm version patch
+git push --follow-tags
+```
+
+3) Verify:
+
+```bash
+npx dagain --help
+```
+
+#### Manual publish
+
 1) Ensure you’re logged in:
 
 ```bash
