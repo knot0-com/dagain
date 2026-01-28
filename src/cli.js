@@ -35,6 +35,61 @@ import {
 	  unlockNode as unlockNodeDb,
 	} from "./lib/db/nodes.js";
 
+function normalizeRunnerPoolMode(mode) {
+  const m = String(mode || "").toLowerCase().trim();
+  return m || "off";
+}
+
+function normalizeFailureKind(kind) {
+  return String(kind || "").toLowerCase().trim();
+}
+
+function normalizePromoteOnList(value) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  for (const entry of value) {
+    const k = normalizeFailureKind(entry);
+    if (!k) continue;
+    out.push(k);
+  }
+  return [...new Set(out)];
+}
+
+function normalizePromoteAfterAttempts(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.floor(n);
+}
+
+async function resolveRunnerNameFromPool({ dbPath, role, seed, attempts, config }) {
+  const list = normalizeRunnerList(config?.roles?.[role] ?? config?.roles?.main);
+  if (list.length === 0) return "";
+  if (list.length === 1) return list[0];
+
+  const pool = config?.supervisor?.runnerPool;
+  const mode = normalizeRunnerPoolMode(pool?.mode);
+  if (mode !== "promotion") return resolveRoleRunnerPick(role, config, { seed, attempt: attempts });
+
+  if (!(Number.isFinite(attempts) && attempts > 0)) return list[0];
+
+  const lastRunnerRow = await kvGet({ dbPath, nodeId: seed, key: "out.last_runner" }).catch(() => null);
+  const lastRunner = typeof lastRunnerRow?.value_text === "string" ? lastRunnerRow.value_text.trim() : "";
+  const lastIdx = lastRunner ? list.indexOf(lastRunner) : -1;
+  const currentIdx = lastIdx >= 0 ? lastIdx : 0;
+  if (currentIdx >= list.length - 1) return list[currentIdx];
+
+  const lastKindRow = await kvGet({ dbPath, nodeId: seed, key: "err.kind" }).catch(() => null);
+  const lastKind = normalizeFailureKind(lastKindRow?.value_text);
+
+  const promoteOn = normalizePromoteOnList(pool?.promoteOn);
+  const promoteAfterAttempts = normalizePromoteAfterAttempts(pool?.promoteAfterAttempts);
+  const shouldPromoteImmediate = lastKind && promoteOn.includes(lastKind);
+  const shouldPromoteAfterK = lastKind === "task_failure" && promoteAfterAttempts > 0 && attempts >= promoteAfterAttempts;
+  if (!shouldPromoteImmediate && !shouldPromoteAfterK) return list[currentIdx];
+
+  return list[currentIdx + 1];
+}
+
 function usage() {
   return `dagain (aliases: taskgraph, choreo)
 
@@ -2767,7 +2822,9 @@ async function executeNode({
   const role = resolveNodeRole(node);
   let runnerName = typeof node?.runner === "string" ? node.runner.trim() : "";
   if (!runnerName) {
-    runnerName = resolveRoleRunnerPick(role, config, { seed: node.id, attempt: Number(node.attempts || 0) });
+    const attemptsRaw = Number(node.attempts || 0);
+    const attempts = Number.isFinite(attemptsRaw) && attemptsRaw >= 0 ? Math.floor(attemptsRaw) : 0;
+    runnerName = await resolveRunnerNameFromPool({ dbPath: paths.dbPath, role, seed: node.id, attempts, config });
   }
 
   const claudeSensitiveFallback = String(config.supervisor?.claudeSensitiveFallbackRunner || "codex").trim() || "codex";
@@ -2915,17 +2972,20 @@ async function executeNode({
   }
 
   let result = await safeReadResult(resultPath);
+  let hadValidResult = Boolean(result);
   if (!result) {
     const stdoutText = await readTextTruncated(stdoutPath, 200_000);
     const extracted = extractResultJson(stdoutText);
     if (extracted) {
       result = extracted;
+      hadValidResult = true;
       await writeJsonAtomic(resultPath, result);
     }
   }
   if (!result) {
     await appendLine(errorsPath, `[${nowIso()}] missing/invalid result.json node=${node.id} run=${run} cmd=${execRes.cmd}`);
     result = { status: "fail", summary: "Missing/invalid result.json", next: { addNodes: [], setStatus: [] }, checkpoint: null, errors: [] };
+    hadValidResult = false;
   }
 
   if (String(result?.status || "").toLowerCase() === "checkpoint") {
@@ -2968,7 +3028,19 @@ async function executeNode({
             ? String(result.errors[0] || "").trim()
             : "");
 
+    const errKind =
+      finalStatus === "success" || finalStatus === "checkpoint"
+        ? ""
+        : execRes?.timedOut
+          ? "timeout"
+          : execRes?.error
+            ? "spawn_error"
+            : hadValidResult
+              ? "task_failure"
+              : "missing_result";
+
     await kvPut({ dbPath: paths.dbPath, nodeId: node.id, key: "out.summary", valueText: summary, runId: run, attempt, nowIso: nowIso() });
+    await kvPut({ dbPath: paths.dbPath, nodeId: node.id, key: "out.last_runner", valueText: runnerName, runId: run, attempt, nowIso: nowIso() });
     await kvPut({
       dbPath: paths.dbPath,
       nodeId: node.id,
@@ -2989,6 +3061,9 @@ async function executeNode({
     });
     if (errSummary) {
       await kvPut({ dbPath: paths.dbPath, nodeId: node.id, key: "err.summary", valueText: errSummary, runId: run, attempt, nowIso: nowIso() });
+    }
+    if (errKind) {
+      await kvPut({ dbPath: paths.dbPath, nodeId: node.id, key: "err.kind", valueText: errKind, runId: run, attempt, nowIso: nowIso() });
     }
 
     const defaultRetryPolicy = resolveDefaultRetryPolicy(config);

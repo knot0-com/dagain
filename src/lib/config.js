@@ -33,6 +33,7 @@ export function defaultConfig() {
       shellVerify: { cmd: 'node "$CHOREO_SHELL_VERIFIER"' },
       shellMerge: { cmd: 'node "$CHOREO_SHELL_MERGE"' },
       codex: { cmd: "codex exec --yolo --skip-git-repo-check -" },
+      codexMedium: { cmd: "codex exec --yolo --skip-git-repo-check -m gpt-5.2-codex -c model_reasoning_effort=medium -" },
       // Note: Claude forbids --dangerously-skip-permissions when running as root/sudo.
       // choreo strips that flag automatically in those contexts.
       claude: {
@@ -44,7 +45,7 @@ export function defaultConfig() {
     roles: {
       main: "codex",
       planner: "codex",
-      executor: "codex",
+      executor: "codexMedium",
       verifier: "codex",
       integrator: "codex",
       finalVerifier: "codex",
@@ -55,6 +56,11 @@ export function defaultConfig() {
 	      idleSleepMs: 2000,
 	      staleLockSeconds: 3600,
 	      autoResetFailedMax: 1,
+	      runnerPool: {
+	        mode: "off",
+	        promoteOn: ["timeout", "missing_result", "spawn_error"],
+	        promoteAfterAttempts: 2,
+	      },
 	      claudeSensitiveFallbackRunner: "codex",
 	      multiVerifier: "one",
 	      worktrees: { mode: "off", dir: ".dagain/worktrees" },
