@@ -3718,12 +3718,25 @@ async function chatCommand(rootDir, flags) {
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   rl.setPrompt("dagain> ");
-  rl.prompt();
+  let rlClosed = false;
+  rl.on("close", () => {
+    rlClosed = true;
+  });
+  function promptSafe() {
+    if (rlClosed) return;
+    try {
+      rl.prompt();
+    } catch (error) {
+      if (error && typeof error === "object" && error.code === "ERR_USE_AFTER_CLOSE") return;
+      throw error;
+    }
+  }
+  promptSafe();
   try {
     for await (const lineRaw of rl) {
       const line = String(lineRaw || "").trim();
       if (!line) {
-        rl.prompt();
+        promptSafe();
         continue;
       }
       if (line === "/exit" || line === "/quit") break;
@@ -3742,22 +3755,22 @@ async function chatCommand(rootDir, flags) {
             "- /forget\n" +
             "- /exit\n",
         );
-        rl.prompt();
+        promptSafe();
         continue;
       }
       if (line === "/status") {
         await statusCommand(rootDir);
-        rl.prompt();
+        promptSafe();
         continue;
       }
       if (line === "/run") {
         await startSupervisorDetached({ rootDir, flags });
-        rl.prompt();
+        promptSafe();
         continue;
       }
       if (line === "/stop") {
         await stopCommand(rootDir, flags);
-        rl.prompt();
+        promptSafe();
         continue;
       }
       if (line === "/pause") {
@@ -3766,7 +3779,7 @@ async function chatCommand(rootDir, flags) {
         } catch (error) {
           process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
         }
-        rl.prompt();
+        promptSafe();
         continue;
       }
       if (line === "/resume") {
@@ -3775,7 +3788,7 @@ async function chatCommand(rootDir, flags) {
         } catch (error) {
           process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
         }
-        rl.prompt();
+        promptSafe();
         continue;
       }
       if (line.startsWith("/workers")) {
@@ -3786,7 +3799,7 @@ async function chatCommand(rootDir, flags) {
         } catch (error) {
           process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
         }
-        rl.prompt();
+        promptSafe();
         continue;
       }
       if (line === "/replan") {
@@ -3795,7 +3808,7 @@ async function chatCommand(rootDir, flags) {
         } catch (error) {
           process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
         }
-        rl.prompt();
+        promptSafe();
         continue;
       }
       if (line.startsWith("/cancel")) {
@@ -3806,7 +3819,7 @@ async function chatCommand(rootDir, flags) {
         } catch (error) {
           process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
         }
-        rl.prompt();
+        promptSafe();
         continue;
       }
       if (line === "/memory") {
@@ -3836,7 +3849,7 @@ async function chatCommand(rootDir, flags) {
         } catch (error) {
           process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
         }
-        rl.prompt();
+        promptSafe();
         continue;
       }
       if (line === "/forget") {
@@ -3851,7 +3864,7 @@ async function chatCommand(rootDir, flags) {
         } catch (error) {
           process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
         }
-        rl.prompt();
+        promptSafe();
         continue;
       }
       if (!line.startsWith("/") && /^pause(\s+launching)?$/i.test(line)) {
@@ -3860,13 +3873,13 @@ async function chatCommand(rootDir, flags) {
         } catch (error) {
           process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
         }
-        rl.prompt();
+        promptSafe();
         continue;
       }
       if (!line.startsWith("/")) {
         if (noLlm) {
           process.stdout.write("LLM disabled. Use /help or /status.\n");
-          rl.prompt();
+          promptSafe();
           continue;
         }
         try {
@@ -4073,41 +4086,46 @@ async function chatCommand(rootDir, flags) {
         } catch (error) {
           process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
         }
-        rl.prompt();
+        promptSafe();
         continue;
       }
       if (line === "/run.start") {
         await startSupervisorDetached({ rootDir, flags });
-        rl.prompt();
+        promptSafe();
         continue;
       }
       if (line === "/run.stop") {
         await stopCommand(rootDir, flags);
-        rl.prompt();
+        promptSafe();
         continue;
       }
       if (line === "/run.status") {
         const lock = await readSupervisorLock(paths.lockPath);
         if (!lock) process.stdout.write("No supervisor lock found.\n");
         else process.stdout.write(`Supervisor lock pid=${lock.pid || "?"} host=${lock.host || "?"}\n`);
-        rl.prompt();
+        promptSafe();
         continue;
       }
       if (line === "/node.add") {
         process.stdout.write('Tip: use natural language, or run `dagain node add --id=... --title="..." --parent=plan-000`.\n');
-        rl.prompt();
+        promptSafe();
         continue;
       }
       if (line === "/node.set-status") {
         process.stdout.write("Tip: run `dagain node set-status --id=<id> --status=<open|done|failed|needs_human>`.\n");
-        rl.prompt();
+        promptSafe();
         continue;
       }
       process.stdout.write(`Unknown command: ${line}\n`);
-      rl.prompt();
+      promptSafe();
     }
   } finally {
-    rl.close();
+    try {
+      if (!rlClosed) rl.close();
+    } catch (error) {
+      if (error && typeof error === "object" && error.code === "ERR_USE_AFTER_CLOSE") return;
+      throw error;
+    }
   }
 }
 
