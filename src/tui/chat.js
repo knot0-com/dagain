@@ -793,6 +793,14 @@ export async function runChatTui(rootDir, flags) {
     }
   }
 
+  let exiting = false;
+  function exitNow() {
+    if (exiting) return;
+    exiting = true;
+    cleanupAndExit();
+    process.exit(0);
+  }
+
   const focusOrder = [input, dagList, nodeLogBox];
   function cycleFocus(delta) {
     const focused = screen.focused;
@@ -809,10 +817,9 @@ export async function runChatTui(rootDir, flags) {
     screen.render();
   });
 
-  screen.program.key(["C-c"], () => {
-    cleanupAndExit();
-    process.exit(0);
-  });
+  screen.key(["C-c"], exitNow);
+  screen.program.key(["C-c"], exitNow);
+  process.on("SIGINT", exitNow);
 
   input.on("submit", async (value) => {
     const line = String(value || "").trim();
