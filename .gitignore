@@ -6,3 +6,4 @@ dist/
 .worktrees/
 .runs/
 *.log
+active_context.md
