@@ -1,7 +1,7 @@
 If this folder changes, this document must be updated.
 
 This folder contains the terminal UI (TUI) for `dagain` and can start the web dashboard.
-It renders live DAG status (tree + deps + log tail) and accepts chat/control input.
+It renders live DAG status (tree + deps + log tail + status colors) and accepts chat/control input.
 It avoids Blessed table widgets for `screen-256color` stability.
 
 | Name | Role/Status | Responsibility |

@@ -1,5 +1,5 @@
-// Input — `blessed`, dagain DB helpers, and subprocess CLI calls. If this file changes, update this header and the folder Markdown.
-// Output — `runChatTui()` terminal UI for live DAG + chat. If this file changes, update this header and the folder Markdown.
+// Input — `blessed`, dashboard server, dagain DB helpers, and subprocess CLI calls. If this file changes, update this header and the folder Markdown.
+// Output — `runChatTui()` terminal UI for live DAG + chat (and dashboard link). If this file changes, update this header and the folder Markdown.
 // Position — TUI layer (interactive-only) for `dagain chat` and `dagain tui`. If this file changes, update this header and the folder Markdown.
 
 import blessed from "blessed";
@@ -248,15 +248,16 @@ export async function runChatTui(rootDir, flags) {
   let lastLogAtMs = 0;
 
   function statusBadge(node) {
-    if (node?.lock?.runId) return "RUN ";
+    if (node?.lock?.runId) return "{blue-fg}RUN {/blue-fg}";
     const s = String(node?.status || "").toLowerCase();
-    if (s === "done") return "DONE";
-    if (s === "failed") return "FAIL";
-    if (s === "needs_human") return "HUMN";
-    return "OPEN";
+    if (s === "done") return "{green-fg}DONE{/green-fg}";
+    if (s === "failed") return "{red-fg}FAIL{/red-fg}";
+    if (s === "needs_human") return "{magenta-fg}HUMN{/magenta-fg}";
+    if (s === "in_progress") return "{blue-fg}RUN {/blue-fg}";
+    return "{yellow-fg}OPEN{/yellow-fg}";
   }
 
-  function formatDagLine({ node, depth, nextId }) {
+  function formatDagLine({ node, prefix, nextId }) {
     const badge = statusBadge(node);
     const id = node?.id || "(missing-id)";
     const type = node?.type ? truncateText(node.type, 10) : "";
@@ -264,8 +265,8 @@ export async function runChatTui(rootDir, flags) {
     const deps = Array.isArray(node?.dependsOn) ? node.dependsOn : [];
     const depsText = deps.length > 0 ? ` <- ${truncateText(deps.join(","), 44)}` : "";
     const idText = nextId && id === nextId ? `{bold}${id}{/bold}` : id;
-    const indent = "  ".repeat(Math.max(0, depth));
-    return `${indent}${badge} ${idText}${type ? ` [${type}]` : ""}${title ? ` ${title}` : ""}${depsText}`;
+    const p = String(prefix || "");
+    return `${p}${badge} ${idText}${type ? ` [${type}]` : ""}${title ? ` ${title}` : ""}${depsText}`;
   }
 
   function buildDagItems(nodes, nextId) {
@@ -284,18 +285,29 @@ export async function runChatTui(rootDir, flags) {
     const seen = new Set();
     const items = [];
 
-    function walk(node, depth) {
+    function walk(node, prefix, isLast, isRoot) {
       if (!node?.id) return;
       if (seen.has(node.id)) return;
       seen.add(node.id);
-      items.push({ nodeId: node.id, label: formatDagLine({ node, depth, nextId }) });
+      const connector = isRoot ? "" : isLast ? "└─ " : "├─ ";
+      const linePrefix = String(prefix || "") + connector;
+      items.push({ nodeId: node.id, label: formatDagLine({ node, prefix: linePrefix, nextId }) });
       const children = childrenByParent.get(node.id) || [];
-      for (const child of children) walk(child, depth + 1);
+      const childPrefix = String(prefix || "") + (isRoot ? "" : isLast ? "   " : "│  ");
+      for (let i = 0; i < children.length; i++) {
+        const child = children[i];
+        const childIsLast = i === children.length - 1;
+        walk(child, childPrefix, childIsLast, false);
+      }
     }
 
     const roots = childrenByParent.get("__root__") || [];
-    for (const r of roots) walk(r, 0);
-    for (const n of nodes) walk(n, 0);
+    for (let i = 0; i < roots.length; i++) {
+      const r = roots[i];
+      const rootIsLast = i === roots.length - 1;
+      walk(r, "", rootIsLast, true);
+    }
+    for (const n of nodes) walk(n, "", true, true);
 
     return items;
   }

@@ -46,8 +46,8 @@ dagain chat          # TUI by default on a real terminal
 dagain chat --plain  # force the plain readline REPL (useful for piping / non-TTY)
 
 # 4) optional: live dashboards
-dagain tui           # terminal dashboard + chat
-dagain ui            # web dashboard (prints a local URL)
+dagain tui           # terminal dashboard + chat (shows a GUI URL)
+dagain ui            # web dashboard (interactive DAG graph + controls)
 ```
 
 ### Common chat controls
