@@ -1,3 +1,7 @@
+<!-- Input — GitHub/npm readers and CLI users. If this file changes, update this header and the folder Markdown. -->
+<!-- Output — user-facing docs for `dagain`. If this file changes, update this header and the folder Markdown. -->
+<!-- Position — repo/package README and primary usage reference. If this file changes, update this header and the folder Markdown. -->
+
 # dagain
 
 DAG-based orchestration for coding agents (Codex, Claude Code, Gemini).
@@ -31,8 +35,10 @@ dagain --help
 # 1) init state + config (creates .dagain/)
 dagain init --goal "Add a CLI flag --foo and tests" --no-refine
 
-# 2) run the supervisor (streams runner output)
+# 2) run the supervisor (streams runner output; drops into chat on completion)
 dagain run --live
+# disable post-run chat:
+dagain run --no-post-chat
 
 # 3) in another terminal: check status / interact
 dagain status
@@ -54,6 +60,7 @@ Inside `dagain chat` (both TUI and `--plain`):
 - `/workers <n>` — set concurrency
 - `/replan` — force plan node (`plan-000`) to reopen and block launches until it completes
 - `/cancel <nodeId>` — cancel a running node (best-effort)
+- `/artifacts [nodeId]` — show run artifact paths (and last stdout/result for a node)
 - `/memory` / `/forget` — inspect/reset chat memory stored in SQLite KV
 
 ## Concepts

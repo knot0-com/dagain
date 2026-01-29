@@ -1,3 +1,7 @@
+// Input — node:test/assert plus mock runners. If this file changes, update this header and the folder Markdown.
+// Output — end-to-end validation of planner→executor→verifier run artifacts. If this file changes, update this header and the folder Markdown.
+// Position — E2E coverage for `dagain run` producing runnable artifacts. If this file changes, update this header and the folder Markdown.
+
 import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
@@ -119,6 +123,9 @@ test("end-to-end: planner -> executor -> verifier -> done", async () => {
   const runsDir = path.join(tmpDir, ".dagain", "runs");
   const runIds = (await readdir(runsDir)).filter(Boolean).sort();
   assert.ok(runIds.length >= 3, `expected >=3 runs, got ${runIds.length}`);
+  assert.ok(runIds.some((id) => id.startsWith("plan-000-")), `expected plan-000 run dir, got: ${runIds.join(", ")}`);
+  assert.ok(runIds.some((id) => id.startsWith("task-hello-")), `expected task-hello run dir, got: ${runIds.join(", ")}`);
+  assert.ok(runIds.some((id) => id.startsWith("verify-hello-")), `expected verify-hello run dir, got: ${runIds.join(", ")}`);
   for (const runId of runIds) {
     await stat(path.join(runsDir, runId, "packet.md"));
     await stat(path.join(runsDir, runId, "stdout.log"));

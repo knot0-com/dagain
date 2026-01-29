@@ -111,12 +111,12 @@ Usage:
   dagain node set-status --id=<id> --status=<open|done|failed|needs_human> [--force]
   dagain dep add --node=<id> --depends-on=<id> [--required-status=<done|terminal>]
   dagain dep remove --node=<id> --depends-on=<id>
-  dagain start [<goal...>] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
+  dagain start [<goal...>] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>] [--no-post-chat]
   dagain init [--force] [--no-templates] [--goal="..."] [--no-refine] [--max-turns=<n>] [--live] [--no-live] [--color] [--no-color] [--main=<runner[,..]>] [--planner=<runner[,..]>] [--executor=<runner[,..]>] [--verifier=<runner[,..]>] [--integrator=<runner[,..]>] [--final-verifier=<runner[,..]>] [--researcher=<runner[,..]>]
 		  dagain goal [--goal="..."] [--max-turns=<n>] [--runner=<name>] [--live] [--no-live] [--color] [--no-color]
 		  dagain status
-	  dagain run [--once] [--workers=<n>] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
-	  dagain resume [--once] [--workers=<n>] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color]
+		  dagain run [--once] [--workers=<n>] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color] [--no-post-chat]
+		  dagain resume [--once] [--workers=<n>] [--interval-ms=<n>] [--max-iterations=<n>] [--dry-run] [--live] [--no-live] [--color] [--no-color] [--no-post-chat]
 	  dagain answer [--node=<id>] [--checkpoint=<file>] [--answer="..."] [--no-prompt]
 	  dagain kv get [--run] [--node=<id>] --key=<k> [--json]
 	  dagain kv put [--run] [--node=<id>] --key=<k> --value="..." [--allow-cross-node-write]
@@ -585,6 +585,20 @@ function resolveLiveFlag(flags) {
   if (noLive) return false;
   if (Boolean(flags.live)) return true;
   return Boolean(process.stdout.isTTY && process.stderr.isTTY);
+}
+
+function resolvePostChatFlag(flags) {
+  const noPostChat =
+    Boolean(flags["no-post-chat"]) ||
+    Boolean(flags.noPostChat) ||
+    Boolean(flags["no-chat"]) ||
+    Boolean(flags.noChat);
+  if (noPostChat) return false;
+  if (Boolean(flags["post-chat"]) || Boolean(flags.postChat)) return true;
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  if (!interactive) return false;
+  if (Boolean(flags.once) || Boolean(flags["dry-run"])) return false;
+  return true;
 }
 
 function resolveNoColorFlag(flags) {
@@ -1840,7 +1854,8 @@ async function runCommand(rootDir, flags) {
       const worktreeSerial = createSerialQueue();
 
       const spawnWorker = async (node, { nodeCwd = null, worktreePath = null } = {}) => {
-        const run = runId();
+        const runPrefix = sanitizeNodeIdPart(node.id).slice(0, 48);
+        const run = `${runPrefix}-${runId()}`;
         const nodeAbort = new AbortController();
         abortControllersByNodeId.set(node.id, nodeAbort);
         const nodeAbortSignal = AbortSignal.any([abortSignal, nodeAbort.signal]);
@@ -2403,7 +2418,8 @@ async function runCommand(rootDir, flags) {
         continue;
       }
 
-      const run = runId();
+      const runPrefix = sanitizeNodeIdPart(node.id).slice(0, 48);
+      const run = `${runPrefix}-${runId()}`;
       let nodeCwd = null;
       if (worktreeMode === "always" && worktreesDir) {
         const role = resolveNodeRole(node);
@@ -3745,6 +3761,7 @@ async function chatCommand(rootDir, flags) {
             "- /workers <n>\n" +
             "- /replan\n" +
             "- /cancel <nodeId>\n" +
+            "- /artifacts [nodeId]\n" +
             "- /memory\n" +
             "- /forget\n" +
             "- /exit\n",
@@ -3759,6 +3776,41 @@ async function chatCommand(rootDir, flags) {
       }
       if (line === "/run") {
         await startSupervisorDetached({ rootDir, flags });
+        promptSafe();
+        continue;
+      }
+      if (line.startsWith("/artifacts")) {
+        try {
+          const parts = line.split(/\s+/).filter(Boolean);
+          const nodeId = parts[1] || "";
+          const runsRel = path.relative(paths.rootDir, paths.runsDir) || ".dagain/runs";
+          const activityRel = path.relative(paths.rootDir, path.join(paths.memoryDir, "activity.log")) || ".dagain/memory/activity.log";
+
+          process.stdout.write(`runs: ${runsRel}\n`);
+          process.stdout.write(`activity: ${activityRel}\n`);
+
+          if (nodeId) {
+            const stdoutRow = await kvGet({ dbPath: paths.dbPath, nodeId, key: "out.last_stdout_path" }).catch(() => null);
+            const resultRow = await kvGet({ dbPath: paths.dbPath, nodeId, key: "out.last_result_path" }).catch(() => null);
+            const stdoutPath = typeof stdoutRow?.value_text === "string" ? stdoutRow.value_text.trim() : "";
+            const resultPath = typeof resultRow?.value_text === "string" ? resultRow.value_text.trim() : "";
+            if (!stdoutPath && !resultPath) {
+              process.stdout.write(`No recorded artifacts for node: ${nodeId}\n`);
+            } else {
+              if (stdoutPath) process.stdout.write(`last stdout: ${stdoutPath}\n`);
+              if (resultPath) process.stdout.write(`last result: ${resultPath}\n`);
+            }
+          } else {
+            const runIds = (await readdir(paths.runsDir).catch(() => [])).filter(Boolean).sort();
+            const recent = runIds.slice(-5);
+            if (recent.length > 0) {
+              process.stdout.write("recent runs:\n");
+              for (const id of recent) process.stdout.write(`- ${id}\n`);
+            }
+          }
+        } catch (error) {
+          process.stdout.write(`Chat error: ${error?.message || String(error)}\n`);
+        }
         promptSafe();
         continue;
       }
@@ -4464,19 +4516,23 @@ export async function main(argv) {
     await maybeMigrateLegacyStateDir(rootDir);
   }
 
-  if (!command || flags.h || flags.help) {
-    if (flags.h || flags.help || !interactive) {
-      process.stdout.write(usage());
-      return;
-    }
-    const paths = dagainPaths(rootDir);
-    if (await pathExists(paths.dbPath)) await chatEntryCommand(rootDir, flags);
-    else await startCommand(rootDir, flags, []);
-    return;
-  }
+	  if (!command || flags.h || flags.help) {
+	    if (flags.h || flags.help || !interactive) {
+	      process.stdout.write(usage());
+	      return;
+	    }
+	    const paths = dagainPaths(rootDir);
+	    if (await pathExists(paths.dbPath)) await chatEntryCommand(rootDir, flags);
+	    else {
+	      await startCommand(rootDir, flags, []);
+	      if (resolvePostChatFlag(flags)) await chatEntryCommand(rootDir, flags);
+	    }
+	    return;
+	  }
 
   if (command === "start") {
     await startCommand(rootDir, flags, positional);
+    if (resolvePostChatFlag(flags)) await chatEntryCommand(rootDir, flags);
     return;
   }
 
@@ -4492,11 +4548,13 @@ export async function main(argv) {
 
   if (command === "run") {
     await runCommand(rootDir, flags);
+    if (resolvePostChatFlag(flags)) await chatEntryCommand(rootDir, flags);
     return;
   }
 
   if (command === "resume") {
     await runCommand(rootDir, flags);
+    if (resolvePostChatFlag(flags)) await chatEntryCommand(rootDir, flags);
     return;
   }
 
@@ -4565,8 +4623,9 @@ export async function main(argv) {
     return;
   }
 
-  // Shorthand: treat unknown command as an implicit goal string.
-  await startCommand(rootDir, flags, [command, ...positional]);
+	  // Shorthand: treat unknown command as an implicit goal string.
+	  await startCommand(rootDir, flags, [command, ...positional]);
+	  if (resolvePostChatFlag(flags)) await chatEntryCommand(rootDir, flags);
 }
 
 async function stopCommand(rootDir, flags) {

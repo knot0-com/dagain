@@ -6,7 +6,7 @@ import blessed from "blessed";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { dagainPaths, loadConfig } from "../lib/config.js";
@@ -458,6 +458,7 @@ export async function runChatTui(rootDir, flags) {
           "- /workers <n>",
           "- /replan",
           "- /cancel <nodeId>",
+          "- /artifacts [nodeId]",
           "- /memory",
           "- /forget",
           "- /exit",
@@ -470,6 +471,36 @@ export async function runChatTui(rootDir, flags) {
       const res = await runCliCapture({ cwd: rootDir, args: ["status"] });
       const text = String(res.stdout || res.stderr || "").trim();
       if (text) log(text);
+      return false;
+    }
+
+    if (line.startsWith("/artifacts")) {
+      const parts = line.split(/\s+/).filter(Boolean);
+      const nodeId = parts[1] || "";
+      const runsRel = path.relative(paths.rootDir, paths.runsDir) || ".dagain/runs";
+      const activityRel = path.relative(paths.rootDir, path.join(paths.memoryDir, "activity.log")) || ".dagain/memory/activity.log";
+      log(`runs: ${runsRel}`);
+      log(`activity: ${activityRel}`);
+
+      if (nodeId) {
+        const stdoutRow = await kvGet({ dbPath: paths.dbPath, nodeId, key: "out.last_stdout_path" }).catch(() => null);
+        const resultRow = await kvGet({ dbPath: paths.dbPath, nodeId, key: "out.last_result_path" }).catch(() => null);
+        const stdoutPath = typeof stdoutRow?.value_text === "string" ? stdoutRow.value_text.trim() : "";
+        const resultPath = typeof resultRow?.value_text === "string" ? resultRow.value_text.trim() : "";
+        if (!stdoutPath && !resultPath) {
+          log(`No recorded artifacts for node: ${nodeId}`);
+        } else {
+          if (stdoutPath) log(`last stdout: ${stdoutPath}`);
+          if (resultPath) log(`last result: ${resultPath}`);
+        }
+      } else {
+        const runIds = (await readdir(paths.runsDir).catch(() => [])).filter(Boolean).sort();
+        const recent = runIds.slice(-5);
+        if (recent.length > 0) {
+          log("recent runs:");
+          for (const id of recent) log(`- ${id}`);
+        }
+      }
       return false;
     }
 
