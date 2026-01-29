@@ -1,6 +1,6 @@
 // Input — node:http/crypto/fs/path + dagain DB snapshot/control helpers. If this file changes, update this header and the folder Markdown.
-// Output — `serveDashboard()` local HTTP dashboard server (HTML+SSE+control API). If this file changes, update this header and the folder Markdown.
-// Position — Minimal web UI for live DAG viewing and safe controls. If this file changes, update this header and the folder Markdown.
+// Output — `serveDashboard()` local HTTP dashboard server (HTML+SSE+control/log API). If this file changes, update this header and the folder Markdown.
+// Position — Minimal web UI for live DAG viewing (animated layout) and safe controls. If this file changes, update this header and the folder Markdown.
 
 import http from "node:http";
 import { randomBytes } from "node:crypto";
@@ -106,41 +106,71 @@ function homeHtml({ token }) {
     <title>dagain</title>
     <style>
       :root {
-        color-scheme: light dark;
-        --bg: #0b0e14;
-        --panel: rgba(255,255,255,0.06);
-        --panel2: rgba(255,255,255,0.09);
-        --border: rgba(255,255,255,0.12);
-        --muted: rgba(255,255,255,0.7);
-        --text: rgba(255,255,255,0.92);
-        --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
-        --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-        --green: #2ecc71;
-        --red: #ff5c7c;
-        --yellow: #f2c94c;
-        --blue: #4ea1ff;
-        --magenta: #c36bff;
-      }
+        color-scheme: dark;
 
-      @media (prefers-color-scheme: light) {
-        :root {
-          --bg: #fbfbfc;
-          --panel: rgba(0,0,0,0.04);
-          --panel2: rgba(0,0,0,0.06);
-          --border: rgba(0,0,0,0.12);
-          --muted: rgba(0,0,0,0.65);
-          --text: rgba(0,0,0,0.9);
-        }
+        /* Knot0 theme (knot0-www/app/globals.css) */
+        --black: #0a0a0a;
+        --blackLight: #141414;
+        --blackBorder: #1f1f1f;
+        --amber: #ffb000;
+        --amberDim: #b37a00;
+        --cyan: #4ecdc4;
+        --cyanDim: #2a9d8f;
+        --white: #e8e8e8;
+        --whiteDim: #a8a8a8;
+        --whiteMuted: #555555;
+        --green: #39ff14;
+        --red: #ff4444;
+        --purple: #a855f7;
+
+        --bg: var(--black);
+        --panel: var(--blackLight);
+        --panel2: rgba(255, 255, 255, 0.03);
+        --border: var(--blackBorder);
+        --muted: var(--whiteDim);
+        --muted2: var(--whiteMuted);
+        --text: var(--white);
+        --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        --sans: var(--mono);
       }
 
       * { box-sizing: border-box; }
-      body { margin: 0; font-family: var(--sans); background: var(--bg); color: var(--text); }
-      header { padding: 12px 14px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px); }
+      html, body { height: 100%; }
+      body { margin: 0; font-family: var(--mono); background: var(--bg); color: var(--text); }
+
+      /* subtle grain + scanlines (CSS-only) */
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+        opacity: 0.03;
+        pointer-events: none;
+        z-index: 0;
+      }
+      body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background: repeating-linear-gradient(
+          0deg,
+          transparent,
+          transparent 2px,
+          rgba(0, 0, 0, 0.18) 2px,
+          rgba(0, 0, 0, 0.18) 4px
+        );
+        opacity: 0.02;
+        pointer-events: none;
+        z-index: 0;
+      }
+      header, main { position: relative; z-index: 1; }
+
+      header { padding: 12px 14px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: rgba(10, 10, 10, 0.95); backdrop-filter: blur(10px); }
       .top { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; justify-content: space-between; }
       .brand { display: flex; gap: 10px; align-items: center; }
-      .brand h1 { margin: 0; font-size: 14px; letter-spacing: .02em; }
+      .brand h1 { margin: 0; font-size: 14px; letter-spacing: .02em; color: var(--amber); }
       .pills { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-      .pill { padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px; font-size: 12px; background: var(--panel); }
+      .pill { padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px; font-size: 12px; background: var(--panel); color: var(--muted); }
       .pill code { font-family: var(--mono); font-size: 12px; }
       .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: flex-end; }
       .btn {
@@ -151,11 +181,14 @@ function homeHtml({ token }) {
         background: var(--panel);
         color: var(--text);
         cursor: pointer;
+        transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease;
       }
-      .btn:hover { background: var(--panel2); }
+      .btn:hover { background: rgba(255, 255, 255, 0.04); border-color: rgba(78, 205, 196, 0.35); }
       .btn:disabled { opacity: .5; cursor: not-allowed; }
-      .btn.primary { border-color: color-mix(in srgb, var(--blue) 60%, var(--border)); }
-      .btn.danger { border-color: color-mix(in srgb, var(--red) 60%, var(--border)); }
+      .btn.primary { border-color: rgba(255, 176, 0, 0.55); color: var(--amber); }
+      .btn.primary:hover { background: rgba(255, 176, 0, 0.08); border-color: rgba(255, 176, 0, 0.75); }
+      .btn.danger { border-color: rgba(255, 68, 68, 0.55); color: var(--red); }
+      .btn.danger:hover { background: rgba(255, 68, 68, 0.08); border-color: rgba(255, 68, 68, 0.75); }
       .input {
         font-size: 12px;
         padding: 6px 10px;
@@ -165,41 +198,85 @@ function homeHtml({ token }) {
         color: var(--text);
         width: 88px;
       }
+      .input:focus { outline: none; border-color: rgba(255, 176, 0, 0.55); }
       main { display: grid; grid-template-columns: 1.35fr 1fr; gap: 12px; padding: 12px; }
       .card { border: 1px solid var(--border); border-radius: 14px; background: var(--panel); overflow: hidden; min-height: 120px; }
       .cardHeader { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; gap: 10px; justify-content: space-between; align-items: center; }
-      .cardHeader h2 { margin: 0; font-size: 12px; letter-spacing: .03em; text-transform: uppercase; color: var(--muted); }
+      .cardHeader h2 { margin: 0; font-size: 12px; letter-spacing: .03em; text-transform: uppercase; color: var(--muted2); }
       .cardBody { padding: 12px; }
       .mono { font-family: var(--mono); font-size: 12px; }
       .muted { color: var(--muted); }
       .status { display: inline-flex; align-items: center; gap: 6px; }
       .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--muted); }
-      .dot.open { background: var(--yellow); }
-      .dot.in_progress { background: var(--blue); }
+      .dot.open { background: var(--whiteMuted); }
+      .dot.in_progress { background: var(--amber); }
       .dot.done { background: var(--green); }
       .dot.failed { background: var(--red); }
-      .dot.needs_human { background: var(--magenta); }
-      #graphWrap { height: 540px; overflow: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--panel2); }
+      .dot.needs_human { background: var(--purple); }
+
+      #graphWrap {
+        height: 540px;
+        overflow: auto;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--bg);
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255,255,255,0.18) transparent;
+      }
+      #graphWrap::-webkit-scrollbar { width: 8px; height: 8px; }
+      #graphWrap::-webkit-scrollbar-track { background: transparent; }
+      #graphWrap::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 999px; }
+      #graphWrap::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.28); }
       #graph { display: block; }
       .node { cursor: pointer; }
-      .node rect { fill: color-mix(in srgb, var(--panel2) 80%, transparent); stroke: var(--border); stroke-width: 1; }
-      .node:hover rect { stroke: color-mix(in srgb, var(--blue) 55%, var(--border)); }
-      .node.selected rect { stroke: var(--blue); stroke-width: 2; }
-      .node.st-open rect { stroke: color-mix(in srgb, var(--yellow) 60%, var(--border)); }
-      .node.st-in_progress rect { stroke: color-mix(in srgb, var(--blue) 60%, var(--border)); }
-      .node.st-done rect { stroke: color-mix(in srgb, var(--green) 60%, var(--border)); }
-      .node.st-failed rect { stroke: color-mix(in srgb, var(--red) 60%, var(--border)); }
-      .node.st-needs_human rect { stroke: color-mix(in srgb, var(--magenta) 60%, var(--border)); }
-      .node text { font-family: var(--mono); font-size: 12px; fill: var(--text); dominant-baseline: middle; }
-      .edge { stroke: color-mix(in srgb, var(--muted) 55%, transparent); stroke-width: 1.25; fill: none; }
-      .edge.dep { stroke: color-mix(in srgb, var(--muted) 70%, transparent); }
-      .edge.parent { stroke-dasharray: 4 4; opacity: .6; }
-      .edge.active { stroke: var(--blue); }
-      .log { height: 280px; overflow: auto; background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 12px; padding: 10px; white-space: pre-wrap; }
-      @media (prefers-color-scheme: light) {
-        .log { background: rgba(0,0,0,0.04); }
+      .node { transition: filter 160ms ease; }
+      .node rect { fill: var(--blackLight); stroke: rgba(255,255,255,0.14); stroke-width: 1; }
+      .node:hover rect { stroke: rgba(78, 205, 196, 0.55); }
+      .node.selected rect { stroke: var(--cyan); stroke-width: 2; }
+      .node.next rect { stroke: rgba(78, 205, 196, 0.85); }
+
+      .node.st-open rect { stroke: rgba(255,255,255,0.16); }
+      .node.st-in_progress rect { stroke: rgba(255,176,0,0.85); stroke-width: 2; fill: rgba(255,176,0,0.08); }
+      .node.st-done rect { stroke: rgba(57,255,20,0.6); fill: rgba(57,255,20,0.05); }
+      .node.st-failed rect { stroke: rgba(255,68,68,0.75); fill: rgba(255,68,68,0.08); }
+      .node.st-needs_human rect { stroke: rgba(168,85,247,0.75); fill: rgba(168,85,247,0.08); }
+
+      @keyframes glowAmber {
+        0%, 100% { filter: drop-shadow(0 0 6px rgba(255, 176, 0, 0.18)); }
+        50% { filter: drop-shadow(0 0 16px rgba(255, 176, 0, 0.33)); }
       }
+      @keyframes glowPurple {
+        0%, 100% { filter: drop-shadow(0 0 6px rgba(168, 85, 247, 0.18)); }
+        50% { filter: drop-shadow(0 0 16px rgba(168, 85, 247, 0.33)); }
+      }
+      .node.st-in_progress { animation: glowAmber 1.4s ease-in-out infinite; }
+      .node.st-needs_human { animation: glowPurple 1.6s ease-in-out infinite; }
+
+      .node text { font-family: var(--mono); fill: var(--text); }
+      .nodeDot { fill: var(--whiteMuted); }
+      .node.st-open .nodeDot { fill: var(--whiteMuted); }
+      .node.st-in_progress .nodeDot { fill: var(--amber); }
+      .node.st-done .nodeDot { fill: var(--green); }
+      .node.st-failed .nodeDot { fill: var(--red); }
+      .node.st-needs_human .nodeDot { fill: var(--purple); }
+      .nodeId { font-size: 12px; dominant-baseline: middle; }
+      .nodeSub { font-size: 11px; dominant-baseline: middle; fill: var(--muted); }
+
+      .edge { stroke: var(--blackBorder); stroke-width: 1.25; fill: none; opacity: 0.85; transition: stroke 160ms ease, stroke-width 160ms ease, opacity 160ms ease; }
+      .edge.dep { stroke: var(--blackBorder); }
+      .edge.parent { stroke-dasharray: 6 6; opacity: 0.5; }
+      .edge.active { stroke: var(--cyan); stroke-width: 2; opacity: 1; }
+      .edge.next { stroke: rgba(255,176,0,0.75); opacity: 0.95; }
+
+      .log { height: 280px; overflow: auto; background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 12px; padding: 10px; white-space: pre-wrap; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.18) transparent; }
+      .log::-webkit-scrollbar { width: 8px; height: 8px; }
+      .log::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 999px; }
+      .log::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.28); }
       .toast { font-size: 12px; padding-top: 8px; min-height: 18px; color: var(--muted); }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+      }
     </style>
   </head>
   <body>
@@ -266,6 +343,7 @@ function homeHtml({ token }) {
       const elCounts = document.getElementById("counts");
       const elSupervisor = document.getElementById("supervisor");
       const elToast = document.getElementById("toast");
+      const elGraphWrap = document.getElementById("graphWrap");
       const elGraph = document.getElementById("graph");
       const elLog = document.getElementById("log");
 
@@ -285,6 +363,15 @@ function homeHtml({ token }) {
       const inpWorkers = document.getElementById("workers");
       const btnSetWorkers = document.getElementById("setWorkers");
       const btnCancel = document.getElementById("cancel");
+
+      const ns = "http://www.w3.org/2000/svg";
+      let svgReady = false;
+      let edgesLayer = null;
+      let nodesLayer = null;
+      const nodeElById = new Map();
+      const edgeElByKey = new Map();
+      let lastGraph = null;
+      let lastAutoScrollId = "";
 
       function fmtSupervisor(s) {
         if (!s || !s.pid) return "(none)";
@@ -333,7 +420,8 @@ function homeHtml({ token }) {
         for (const n of nodes) {
           const to = n && n.id ? n.id : "";
           if (!to) continue;
-          const deps = Array.isArray(n.dependsOn) ? n.dependsOn : [];
+          const deps = new Set(Array.isArray(n.dependsOn) ? n.dependsOn : []);
+          if (n && n.parentId) deps.add(n.parentId);
           for (const from of deps) {
             if (!byId.has(from)) continue;
             out.get(from).push(to);
@@ -359,7 +447,8 @@ function homeHtml({ token }) {
         for (const id of byId.keys()) layer.set(id, 0);
         for (const id of order) {
           const n = byId.get(id);
-          const deps = Array.isArray(n.dependsOn) ? n.dependsOn : [];
+          const deps = new Set(Array.isArray(n.dependsOn) ? n.dependsOn : []);
+          if (n && n.parentId) deps.add(n.parentId);
           let best = 0;
           for (const dep of deps) best = Math.max(best, (layer.get(dep) || 0) + 1);
           layer.set(id, best);
@@ -381,16 +470,136 @@ function homeHtml({ token }) {
         return "open";
       }
 
-      function nodeLabel(n) {
+      function truncateText(value, maxLen) {
+        const s = String(value || "");
+        const n = Number(maxLen);
+        const limit = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+        if (!limit) return "";
+        if (s.length <= limit) return s;
+        return s.slice(0, Math.max(0, limit - 1)) + "…";
+      }
+
+      function nodeLines(n) {
         const id = (n && n.id) ? String(n.id) : "";
         const type = (n && n.type) ? String(n.type) : "";
-        const status = statusKey(n) || "open";
-        return id + (type ? (" [" + type + "]") : "") + " (" + status + ")";
+        const title = (n && n.title) ? String(n.title) : "";
+        const top = type ? (id + " [" + type + "]") : id;
+        const bottom = title ? title : "(" + (statusKey(n) || "open") + ")";
+        return { top: truncateText(top, 30), bottom: truncateText(bottom, 36) };
+      }
+
+      function buildAdjacency({ nodes, byId }) {
+        const preds = new Map();
+        const succs = new Map();
+        for (const n of nodes) {
+          if (!n || !n.id) continue;
+          preds.set(n.id, []);
+          succs.set(n.id, []);
+        }
+        for (const n of nodes) {
+          const to = n && n.id ? n.id : "";
+          if (!to || !preds.has(to)) continue;
+          const deps = new Set(Array.isArray(n.dependsOn) ? n.dependsOn : []);
+          if (n && n.parentId) deps.add(n.parentId);
+          for (const from of deps) {
+            if (!byId.has(from) || !succs.has(from)) continue;
+            preds.get(to).push(from);
+            succs.get(from).push(to);
+          }
+        }
+        return { preds, succs };
+      }
+
+      function orderLayers({ layers, adjacency, layerById }) {
+        const rowById = new Map();
+        for (let i = 0; i < layers.length; i++) {
+          const col = layers[i];
+          for (let r = 0; r < col.length; r++) rowById.set(col[r].id, r);
+        }
+
+        function scoreFor(id, neighborIds, currentLayer) {
+          const neigh = Array.isArray(neighborIds) ? neighborIds : [];
+          let sum = 0;
+          let wsum = 0;
+          for (const nb of neigh) {
+            const nbLayer = layerById.get(nb);
+            if (typeof nbLayer !== "number") continue;
+            const nbRow = rowById.get(nb);
+            if (typeof nbRow !== "number") continue;
+            const dist = Math.abs(currentLayer - nbLayer);
+            const w = 1 / Math.max(1, dist);
+            sum += nbRow * w;
+            wsum += w;
+          }
+          if (wsum) return sum / wsum;
+          return rowById.get(id) || 0;
+        }
+
+        function reorderLayer(layerIndex, dir) {
+          const col = layers[layerIndex];
+          if (!Array.isArray(col) || col.length <= 1) return;
+          const scored = col.map((n) => {
+            const neighbors = dir === "down" ? adjacency.preds.get(n.id) : adjacency.succs.get(n.id);
+            return { n, s: scoreFor(n.id, neighbors, layerIndex), t: String(n.id || "") };
+          });
+          scored.sort((a, b) => (a.s - b.s) || a.t.localeCompare(b.t));
+          layers[layerIndex] = scored.map((x) => x.n);
+          for (let r = 0; r < layers[layerIndex].length; r++) rowById.set(layers[layerIndex][r].id, r);
+        }
+
+        const iters = 4;
+        for (let k = 0; k < iters; k++) {
+          for (let i = 1; i < layers.length; i++) reorderLayer(i, "down");
+          for (let i = layers.length - 2; i >= 0; i--) reorderLayer(i, "up");
+        }
+      }
+
+      function assignEdgeSlots(edges) {
+        const outgoing = new Map();
+        const incoming = new Map();
+        for (const e of edges) {
+          if (!e || !e.from || !e.to) continue;
+          const out = outgoing.get(e.from) || [];
+          out.push(e);
+          outgoing.set(e.from, out);
+          const inc = incoming.get(e.to) || [];
+          inc.push(e);
+          incoming.set(e.to, inc);
+        }
+        for (const list of outgoing.values()) {
+          list.sort((a, b) => String(a.kind || "").localeCompare(String(b.kind || "")) || String(a.to).localeCompare(String(b.to)));
+          const n = list.length;
+          for (let i = 0; i < n; i++) {
+            list[i].fromSlot = i;
+            list[i].fromSlots = n;
+          }
+        }
+        for (const list of incoming.values()) {
+          list.sort(
+            (a, b) => String(a.kind || "").localeCompare(String(b.kind || "")) || String(a.from).localeCompare(String(b.from)),
+          );
+          const n = list.length;
+          for (let i = 0; i < n; i++) {
+            list[i].toSlot = i;
+            list[i].toSlots = n;
+          }
+        }
+        for (const e of edges) {
+          if (typeof e.fromSlots !== "number") {
+            e.fromSlot = 0;
+            e.fromSlots = 1;
+          }
+          if (typeof e.toSlots !== "number") {
+            e.toSlot = 0;
+            e.toSlots = 1;
+          }
+        }
       }
 
       function buildGraph(snapshot, selectedId) {
         const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
-        const { layer } = layerDag(nodes);
+        const nextId = snapshot && snapshot.next && snapshot.next.id ? snapshot.next.id : "";
+        const { byId, layer } = layerDag(nodes);
         const maxLayer = Math.max(0, ...Array.from(layer.values()));
         const layers = Array.from({ length: maxLayer + 1 }, () => []);
         for (const n of nodes) {
@@ -399,11 +608,16 @@ function homeHtml({ token }) {
         }
         for (const col of layers) col.sort((a, b) => String(a.id).localeCompare(String(b.id)));
 
-        const nodeW = 220;
-        const nodeH = 44;
-        const colGap = 70;
-        const rowGap = 18;
-        const pad = 20;
+        const layerById = new Map();
+        for (let c = 0; c < layers.length; c++) for (const n of layers[c]) layerById.set(n.id, c);
+        const adjacency = buildAdjacency({ nodes, byId });
+        orderLayers({ layers, adjacency, layerById });
+
+        const nodeW = 240;
+        const nodeH = 54;
+        const colGap = 90;
+        const rowGap = 22;
+        const pad = 24;
 
         const pos = new Map();
         const colHeights = [];
@@ -431,19 +645,18 @@ function homeHtml({ token }) {
             if (!pos.has(from) || !pos.has(n.id)) continue;
             edges.push({ from, to: n.id, kind: "dep" });
           }
-          if (n.parentId && pos.has(n.parentId)) edges.push({ from: n.parentId, to: n.id, kind: "parent" });
+          if (n.parentId && pos.has(n.parentId) && !deps.includes(n.parentId))
+            edges.push({ from: n.parentId, to: n.id, kind: "parent" });
         }
-        return { nodes, pos, edges, w, h, selectedId };
+
+        assignEdgeSlots(edges);
+        return { nodes, byId, pos, edges, w, h, selectedId, nextId };
       }
 
-      function renderGraph(graph) {
-        elGraph.setAttribute("width", String(graph.w));
-        elGraph.setAttribute("height", String(graph.h));
-        elGraph.setAttribute("viewBox", "0 0 " + graph.w + " " + graph.h);
-        elGraph.setAttribute("preserveAspectRatio", "xMinYMin meet");
-        elGraph.innerHTML = "";
+      function ensureSvg() {
+        if (svgReady) return;
+        svgReady = true;
 
-        const ns = "http://www.w3.org/2000/svg";
         const defs = document.createElementNS(ns, "defs");
         const marker = document.createElementNS(ns, "marker");
         marker.setAttribute("id", "arrow");
@@ -454,57 +667,182 @@ function homeHtml({ token }) {
         marker.setAttribute("orient", "auto");
         const arrow = document.createElementNS(ns, "path");
         arrow.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
-        arrow.setAttribute("fill", "currentColor");
+        arrow.setAttribute("fill", "context-stroke");
         marker.appendChild(arrow);
         defs.appendChild(marker);
         elGraph.appendChild(defs);
 
+        edgesLayer = document.createElementNS(ns, "g");
+        edgesLayer.setAttribute("data-layer", "edges");
+        nodesLayer = document.createElementNS(ns, "g");
+        nodesLayer.setAttribute("data-layer", "nodes");
+        elGraph.appendChild(edgesLayer);
+        elGraph.appendChild(nodesLayer);
+      }
+
+      function animateEdgeDraw(pathEl) {
+        if (!pathEl) return;
+        const reduceMotion =
+          typeof window !== "undefined" &&
+          typeof window.matchMedia === "function" &&
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        if (reduceMotion) return;
+        try {
+          const len = pathEl.getTotalLength();
+          pathEl.style.strokeDasharray = String(len);
+          pathEl.style.strokeDashoffset = String(len);
+          if (typeof pathEl.animate === "function") {
+            pathEl.animate([{ strokeDashoffset: len }, { strokeDashoffset: 0 }], { duration: 420, easing: "ease-out", fill: "forwards" });
+          } else {
+            requestAnimationFrame(() => {
+              pathEl.style.strokeDashoffset = "0";
+            });
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      function scrollNodeIntoView(nodeId, behavior = "smooth") {
+        if (!elGraphWrap || !lastGraph || !nodeId) return;
+        const p = lastGraph.pos.get(nodeId);
+        if (!p) return;
+        const pad = 36;
+        const left = Math.max(0, p.x - pad);
+        const top = Math.max(0, p.y - pad);
+        try {
+          elGraphWrap.scrollTo({ left, top, behavior });
+        } catch {
+          elGraphWrap.scrollLeft = left;
+          elGraphWrap.scrollTop = top;
+        }
+      }
+
+      function renderGraph(graph) {
+        ensureSvg();
+        elGraph.setAttribute("width", String(graph.w));
+        elGraph.setAttribute("height", String(graph.h));
+        elGraph.setAttribute("viewBox", "0 0 " + graph.w + " " + graph.h);
+        elGraph.setAttribute("preserveAspectRatio", "xMinYMin meet");
+        if (!edgesLayer || !nodesLayer) return;
+
+        const seenEdges = new Set();
         for (const e of graph.edges) {
+          const key = String(e.kind) + ":" + String(e.from) + "->" + String(e.to);
+          seenEdges.add(key);
+          let pathEl = edgeElByKey.get(key);
+          const isNew = !pathEl;
+          if (!pathEl) {
+            pathEl = document.createElementNS(ns, "path");
+            edgeElByKey.set(key, pathEl);
+            edgesLayer.appendChild(pathEl);
+            if (e.kind === "dep") pathEl.setAttribute("marker-end", "url(#arrow)");
+          }
+
           const a = graph.pos.get(e.from);
           const b = graph.pos.get(e.to);
-          if (!a || !b) continue;
+          if (!a || !b) {
+            pathEl.setAttribute("d", "");
+            continue;
+          }
+
+          const fromSlot = Number.isFinite(Number(e.fromSlot)) ? Number(e.fromSlot) : 0;
+          const fromSlots = Number.isFinite(Number(e.fromSlots)) ? Math.max(1, Number(e.fromSlots)) : 1;
+          const toSlot = Number.isFinite(Number(e.toSlot)) ? Number(e.toSlot) : 0;
+          const toSlots = Number.isFinite(Number(e.toSlots)) ? Math.max(1, Number(e.toSlots)) : 1;
+
           const x1 = a.x + a.w;
-          const y1 = a.y + a.h / 2;
+          const y1 = a.y + ((fromSlot + 1) / (fromSlots + 1)) * a.h;
           const x2 = b.x;
-          const y2 = b.y + b.h / 2;
+          const y2 = b.y + ((toSlot + 1) / (toSlots + 1)) * b.h;
           const midX = (x1 + x2) / 2;
-          const p = document.createElementNS(ns, "path");
-          p.setAttribute(
-            "class",
-            "edge " + e.kind + ((graph.selectedId && (e.from === graph.selectedId || e.to === graph.selectedId)) ? " active" : ""),
-          );
-          p.setAttribute("d", "M " + x1 + " " + y1 + " C " + midX + " " + y1 + ", " + midX + " " + y2 + ", " + x2 + " " + y2);
-          if (e.kind === "dep") p.setAttribute("marker-end", "url(#arrow)");
-          elGraph.appendChild(p);
+          pathEl.setAttribute("d", "M " + x1 + " " + y1 + " C " + midX + " " + y1 + ", " + midX + " " + y2 + ", " + x2 + " " + y2);
+
+          const cls =
+            "edge " +
+            e.kind +
+            ((graph.selectedId && (e.from === graph.selectedId || e.to === graph.selectedId)) ? " active" : "") +
+            ((graph.nextId && e.to === graph.nextId) ? " next" : "");
+          pathEl.setAttribute("class", cls);
+
+          if (isNew && e.kind === "dep") animateEdgeDraw(pathEl);
+        }
+        for (const [key, el] of edgeElByKey.entries()) {
+          if (seenEdges.has(key)) continue;
+          try {
+            el.remove();
+          } catch {
+            // ignore
+          }
+          edgeElByKey.delete(key);
         }
 
+        const seenNodes = new Set();
         for (const n of graph.nodes) {
+          if (!n || !n.id) continue;
           const p = graph.pos.get(n.id);
           if (!p) continue;
-          const g = document.createElementNS(ns, "g");
+          const id = n.id;
+          seenNodes.add(id);
+          let view = nodeElById.get(id);
+          if (!view) {
+            const g = document.createElementNS(ns, "g");
+            g.dataset.nodeId = id;
+            g.addEventListener("click", () => selectNode(id));
+
+            const r = document.createElementNS(ns, "rect");
+            r.setAttribute("x", "0");
+            r.setAttribute("y", "0");
+            r.setAttribute("rx", "10");
+            r.setAttribute("ry", "10");
+            r.setAttribute("width", String(p.w));
+            r.setAttribute("height", String(p.h));
+
+            const dot = document.createElementNS(ns, "circle");
+            dot.setAttribute("cx", "12");
+            dot.setAttribute("cy", "16");
+            dot.setAttribute("r", "4");
+            dot.setAttribute("class", "nodeDot");
+
+            const t1 = document.createElementNS(ns, "text");
+            t1.setAttribute("x", "22");
+            t1.setAttribute("y", "18");
+            t1.setAttribute("class", "nodeId");
+            t1.setAttribute("font-weight", "600");
+
+            const t2 = document.createElementNS(ns, "text");
+            t2.setAttribute("x", "12");
+            t2.setAttribute("y", "38");
+            t2.setAttribute("class", "nodeSub");
+
+            g.appendChild(r);
+            g.appendChild(dot);
+            g.appendChild(t1);
+            g.appendChild(t2);
+            nodesLayer.appendChild(g);
+            view = { g, r, dot, t1, t2 };
+            nodeElById.set(id, view);
+          }
+
           const st = statusDotClass(n);
-          g.setAttribute("class", "node st-" + st + (graph.selectedId === n.id ? " selected" : ""));
-          g.dataset.nodeId = n.id;
+          view.g.setAttribute(
+            "class",
+            "node st-" + st + (graph.selectedId === id ? " selected" : "") + (graph.nextId === id ? " next" : ""),
+          );
+          view.g.setAttribute("transform", "translate(" + p.x + " " + p.y + ")");
 
-          const r = document.createElementNS(ns, "rect");
-          r.setAttribute("x", p.x);
-          r.setAttribute("y", p.y);
-          r.setAttribute("rx", "10");
-          r.setAttribute("ry", "10");
-          r.setAttribute("width", p.w);
-          r.setAttribute("height", p.h);
-          g.appendChild(r);
-
-          const t = document.createElementNS(ns, "text");
-          t.setAttribute("x", p.x + 12);
-          t.setAttribute("y", p.y + p.h / 2);
-          t.textContent = nodeLabel(n);
-          g.appendChild(t);
-
-          g.addEventListener("click", () => {
-            selectNode(n.id);
-          });
-          elGraph.appendChild(g);
+          const lines = nodeLines(n);
+          view.t1.textContent = lines.top;
+          view.t2.textContent = lines.bottom;
+        }
+        for (const [id, view] of nodeElById.entries()) {
+          if (seenNodes.has(id)) continue;
+          try {
+            view.g.remove();
+          } catch {
+            // ignore
+          }
+          nodeElById.delete(id);
         }
       }
 
@@ -555,6 +893,10 @@ function homeHtml({ token }) {
       function selectNode(id) {
         selectedNodeId = id || "";
         if (lastSnapshot) render(lastSnapshot);
+        if (selectedNodeId) {
+          lastAutoScrollId = selectedNodeId;
+          scrollNodeIntoView(selectedNodeId, "smooth");
+        }
       }
 
       function render(snapshot) {
@@ -570,8 +912,14 @@ function homeHtml({ token }) {
           selectedNodeId = (snapshot.next && snapshot.next.id) ? snapshot.next.id : ((nodes[0] && nodes[0].id) ? nodes[0].id : "");
         }
         const graph = buildGraph(snapshot, selectedNodeId);
+        lastGraph = graph;
         renderGraph(graph);
         updateSelection();
+
+        if (selectedNodeId && selectedNodeId !== lastAutoScrollId) {
+          lastAutoScrollId = selectedNodeId;
+          scrollNodeIntoView(selectedNodeId, "auto");
+        }
       }
 
       btnPause.onclick = async () => {

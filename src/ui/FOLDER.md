@@ -1,8 +1,8 @@
 If this folder changes, this document must be updated.
 
 This folder contains the lightweight web UI for `dagain`.
-It serves a local HTML dashboard (interactive DAG graph) plus JSON/SSE endpoints.
-It also exposes a small local control API (pause/resume/replan/set-workers/cancel).
+It serves a local HTML dashboard (animated DAG graph + node log tail) plus JSON/SSE endpoints.
+It also exposes a small local control API (pause/resume/replan/set-workers/cancel) and node log tail API.
 
 | Name | Role/Status | Responsibility |
 | --- | --- | --- |
