@@ -1,3 +1,7 @@
+<!-- Input — Dagain runtime env vars and node context. If this file changes, update this header and the folder Markdown. -->
+<!-- Output — Final verifier role prompt template. If this file changes, update this header and the folder Markdown. -->
+<!-- Position — Built-in template copied into `.dagain/templates/`. If this file changes, update this header and the folder Markdown. -->
+
 # Dagain Packet — Final Verifier
 
 You are the final verifier for the overall goal. Verify the project satisfies the definition of done in `GOAL.md`.
@@ -26,6 +30,10 @@ KV cheat sheet:
 - Write (this node): `"$DAGAIN_BIN" kv put --key out.summary --value "..."` (uses `$DAGAIN_NODE_ID`)
 - Write (shared): `"$DAGAIN_BIN" kv put --run --key ctx.decisions --value "..."` (uses `__run__`)
 - Read: `"$DAGAIN_BIN" kv get --node <id> --key out.summary --json`
+
+Artifacts policy (IMPORTANT):
+- Only modify repo files when `GOAL.md` requires it.
+- If verification produces reports/logs, write them under `$DAGAIN_ARTIFACTS_DIR/$DAGAIN_NODE_ID/$DAGAIN_RUN_ID/` and reference the paths in your `summary`.
 
 ### GOAL.md (truncated)
 {{GOAL_DRAFT}}

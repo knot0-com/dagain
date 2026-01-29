@@ -152,6 +152,7 @@ Dagain stores state in:
 - `.dagain/workgraph.json` — human-readable graph snapshot (mirrors SQLite)
 - `.dagain/lock` — supervisor lock (used by `dagain stop`)
 - `.dagain/runs/` — per-node packets + logs + results
+- `.dagain/artifacts/` — non-source outputs (reports, scratch notes, generated data)
 - `.dagain/checkpoints/` — human-in-the-loop checkpoints
 - `.dagain/memory/` — durable notes + logs (`task_plan.md`, `findings.md`, `progress.md`)
 

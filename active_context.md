@@ -1,5 +1,5 @@
 # Active Context
-*Last updated: 2026-01-29T04:11:02Z by codex*
+*Last updated: 2026-01-29T04:36:26Z by codex*
 
 ## Current System Status
 UI/TUI dashboards are shipped. `dagain run` now drops into chat on TTY so users can inspect run artifacts after completion.
@@ -14,6 +14,7 @@ UI/TUI dashboards are shipped. `dagain run` now drops into chat on TTY so users 
 - `src/cli.js:4126` adds `dagain ui`, `dagain tui`, and TTY-default `dagain chat` (with `--plain` fallback).
 - `src/cli.js:596` adds post-run chat (`--no-post-chat`) and prefixes `.dagain/runs/*` with node id for discoverability.
 - `src/tui/chat.js:541` adds `/artifacts [nodeId]` to surface run paths and last stdout/result paths.
+- `templates/executor.md:1` instructs runners to write non-source outputs under `$DAGAIN_ARTIFACTS_DIR/...` for discoverability.
 - `src/ui/server.js:113` adds a lightweight local dashboard server with SSE updates.
 - `src/tui/chat.js:119` adds a minimal terminal UI for live DAG viewing + chat.
 - `test/helpers/sqlite.js:7` adds a busy-timeout to reduce transient sqlite lock flakes in tests.
