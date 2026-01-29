@@ -31,5 +31,8 @@
   "bugs": {
     "url": "https://github.com/knot0-com/dagain/issues"
   },
-  "homepage": "https://github.com/knot0-com/dagain"
+  "homepage": "https://github.com/knot0-com/dagain",
+  "dependencies": {
+    "blessed": "^0.1.81"
+  }
 }

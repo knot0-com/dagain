@@ -1,8 +1,14 @@
+// Input — `sqlite3` CLI via child_process spawn. If this file changes, update this header and the folder Markdown.
+// Output — `sqliteExec()` and `sqliteJson()` helpers for tests. If this file changes, update this header and the folder Markdown.
+// Position — Test-only SQLite wrapper with busy-timeout to avoid flake locks. If this file changes, update this header and the folder Markdown.
+
 import { spawn } from "node:child_process";
+
+const SQLITE_TIMEOUT_MS = 5000;
 
 export function sqliteExec(dbPath, sql) {
   return new Promise((resolve, reject) => {
-    const child = spawn("sqlite3", ["-bail", dbPath], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn("sqlite3", ["-bail", "-cmd", `.timeout ${SQLITE_TIMEOUT_MS}`, dbPath], { stdio: ["pipe", "pipe", "pipe"] });
     let err = "";
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (d) => (err += d));
@@ -17,7 +23,7 @@ export function sqliteExec(dbPath, sql) {
 
 export function sqliteJson(dbPath, sql) {
   return new Promise((resolve, reject) => {
-    const child = spawn("sqlite3", ["-json", dbPath, sql], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("sqlite3", ["-json", "-cmd", `.timeout ${SQLITE_TIMEOUT_MS}`, dbPath, sql], { stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
     let err = "";
     child.stdout.setEncoding("utf8");

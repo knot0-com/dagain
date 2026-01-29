@@ -9,6 +9,8 @@ GOAL.md
 # Tests + internal planning docs
 test/
 docs/plans/
+active_context.md
+**/FOLDER.md
 
 # Test-only / development helpers
 scripts/mock-*

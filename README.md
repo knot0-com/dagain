@@ -36,12 +36,17 @@ dagain run --live
 
 # 3) in another terminal: check status / interact
 dagain status
-dagain chat
+dagain chat          # TUI by default on a real terminal
+dagain chat --plain  # force the plain readline REPL (useful for piping / non-TTY)
+
+# 4) optional: live dashboards
+dagain tui           # terminal dashboard + chat
+dagain ui            # web dashboard (prints a local URL)
 ```
 
 ### Common chat controls
 
-Inside `dagain chat`:
+Inside `dagain chat` (both TUI and `--plain`):
 
 - `/status` — print graph status
 - `/run` — start supervisor

@@ -1,3 +1,7 @@
+// Input — node stdlib and dagain runtime modules. If this file changes, update this header and the folder Markdown.
+// Output — `main(argv)` CLI entrypoint. If this file changes, update this header and the folder Markdown.
+// Position — CLI routing and command implementations. If this file changes, update this header and the folder Markdown.
+
 import path from "node:path";
 import os from "node:os";
 import { spawn } from "node:child_process";
@@ -17,6 +21,8 @@ import { normalizeRunnerList, resolveNodeRole, resolveRoleRunnerPick, runRunnerC
 import { OwnershipLockManager } from "./lib/ownership-locks.js";
 import { acquireSupervisorLock, heartbeatSupervisorLock, readSupervisorLock, releaseSupervisorLock } from "./lib/lock.js";
 import { createUi } from "./lib/ui.js";
+import { runChatTui } from "./tui/chat.js";
+import { serveDashboard } from "./ui/server.js";
 import { sqliteExec, sqliteQueryJson } from "./lib/db/sqlite3.js";
 import { exportWorkgraphJson, loadWorkgraphFromDb } from "./lib/db/export.js";
 import { mailboxAck, mailboxClaimNext, mailboxEnqueue } from "./lib/db/mailbox.js";
@@ -25,15 +31,15 @@ import { ensureDepsRequiredStatusColumn, ensureMailboxTable } from "./lib/db/mig
 import {
   allDoneDb,
   applyResult as applyResultDb,
-	  claimNode,
-	  countByStatusDb,
-	  getNode,
-	  listFailedDepsBlockingOpenNodes,
-	  listNodes,
-	  selectRunnableCandidates,
-	  selectNextRunnableNode,
-	  unlockNode as unlockNodeDb,
-	} from "./lib/db/nodes.js";
+  claimNode,
+  countByStatusDb,
+  getNode,
+  listFailedDepsBlockingOpenNodes,
+  listNodes,
+  selectRunnableCandidates,
+  selectNextRunnableNode,
+  unlockNode as unlockNodeDb,
+} from "./lib/db/nodes.js";
 
 function normalizeRunnerPoolMode(mode) {
   const m = String(mode || "").toLowerCase().trim();
@@ -95,7 +101,7 @@ function usage() {
 
 Usage:
   dagain [<goal...>] [--color] [--no-color]
-  dagain chat [--no-color]
+  dagain chat [--plain] [--no-color]
   dagain control pause|resume
   dagain control set-workers --workers=<n>
   dagain control replan
@@ -116,6 +122,8 @@ Usage:
 	  dagain kv put [--run] [--node=<id>] --key=<k> --value="..." [--allow-cross-node-write]
 	  dagain kv ls [--run] [--node=<id>] [--prefix=<p>] [--json]
   dagain microcall --prompt="..." [--runner=<name>] [--role=<role>] [--store-key=<k>] [--run] [--json]
+  dagain ui [--host=<h>] [--port=<n>]
+  dagain tui
   dagain templates sync [--force]
 		  dagain stop [--signal=<sig>]
 		  dagain graph validate
@@ -4115,6 +4123,48 @@ async function chatCommand(rootDir, flags) {
   }
 }
 
+async function chatEntryCommand(rootDir, flags) {
+  const plain = Boolean(flags.plain) || Boolean(flags["plain"]);
+  const canTui = process.stdin.isTTY && process.stdout.isTTY;
+  if (!plain && canTui) {
+    await runChatTui(rootDir, flags);
+    return;
+  }
+  await chatCommand(rootDir, flags);
+}
+
+async function uiCommand(rootDir, flags) {
+  const paths = dagainPaths(rootDir);
+  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
+
+  const hostRaw = typeof flags.host === "string" ? flags.host : "127.0.0.1";
+  const host = String(hostRaw || "").trim() || "127.0.0.1";
+
+  const portRaw = flags.port ?? 3876;
+  const portNum = Number(portRaw);
+  if (!Number.isFinite(portNum) || portNum < 0 || portNum > 65535) throw new Error("Invalid --port.");
+  const port = Math.floor(portNum);
+
+  const srv = await serveDashboard({ paths, host, port });
+  process.stdout.write(`dagain ui listening on ${srv.url}\n`);
+
+  await new Promise((resolve) => {
+    let closed = false;
+    const shutdown = (signal) => {
+      if (closed) return;
+      closed = true;
+      process.stdout.write(`Shutting down (${signal})...\n`);
+      srv.close().finally(resolve);
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+  });
+}
+
+async function tuiCommand(rootDir, flags) {
+  await runChatTui(rootDir, flags);
+}
+
 async function nodeCommand(rootDir, positional, flags) {
   const paths = dagainPaths(rootDir);
   const config = await loadConfig(paths.configPath);
@@ -4420,7 +4470,7 @@ export async function main(argv) {
       return;
     }
     const paths = dagainPaths(rootDir);
-    if (await pathExists(paths.dbPath)) await chatCommand(rootDir, flags);
+    if (await pathExists(paths.dbPath)) await chatEntryCommand(rootDir, flags);
     else await startCommand(rootDir, flags, []);
     return;
   }
@@ -4471,7 +4521,17 @@ export async function main(argv) {
   }
 
   if (command === "chat") {
-    await chatCommand(rootDir, flags);
+    await chatEntryCommand(rootDir, flags);
+    return;
+  }
+
+  if (command === "ui") {
+    await uiCommand(rootDir, flags);
+    return;
+  }
+
+  if (command === "tui") {
+    await tuiCommand(rootDir, flags);
     return;
   }
 
