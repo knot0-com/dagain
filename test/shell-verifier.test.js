@@ -1,3 +1,7 @@
+// Input — shell-verifier script + sqlite schema helper. If this file changes, update this header and the folder Markdown.
+// Output — tests for verifier output and env compat. If this file changes, update this header and the folder Markdown.
+// Position — regression tests for built-in shell verifier. If this file changes, update this header and the folder Markdown.
+
 import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
@@ -83,6 +87,34 @@ test("shell-verifier: success when all commands pass", async () => {
     env: {
       DAGAIN_DB: dbPath,
       DAGAIN_NODE_ID: nodeId,
+    },
+  });
+
+  assert.equal(res.code, 0, res.stderr || res.stdout);
+  const parsed = extractResultJson(res.stdout);
+  assert.ok(parsed, `expected <result> JSON, got: ${res.stdout}`);
+  assert.equal(parsed.status, "success");
+});
+
+test("shell-verifier: accepts CHOREO_* env vars", async () => {
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const scriptPath = path.join(repoRoot, "scripts", "shell-verifier.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-shell-verifier-choreo-"));
+  const dbPath = path.join(tmpDir, "state.sqlite");
+  const nodeId = "verify-ok-choreo";
+
+  await createDbWithNode({
+    dbPath,
+    nodeId,
+    verify: [`node -e "process.exit(0)"`],
+  });
+
+  const res = await runScript({
+    scriptPath,
+    cwd: tmpDir,
+    env: {
+      CHOREO_DB: dbPath,
+      CHOREO_NODE_ID: nodeId,
     },
   });
 

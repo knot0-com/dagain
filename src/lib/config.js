@@ -1,3 +1,7 @@
+// Input — node:path and JSON/file helpers. If this file changes, update this header and the folder Markdown.
+// Output — `dagainPaths()` and config load/save/defaults. If this file changes, update this header and the folder Markdown.
+// Position — Config + `.dagain/` path conventions for the CLI. If this file changes, update this header and the folder Markdown.
+
 import path from "node:path";
 import { pathExists, readJson, writeJsonAtomic } from "./fs.js";
 
@@ -30,8 +34,8 @@ export function defaultConfig() {
       mergeRunner: "shellMerge",
     },
     runners: {
-      shellVerify: { cmd: 'node "$DAGAIN_SHELL_VERIFIER"' },
-      shellMerge: { cmd: 'node "$DAGAIN_SHELL_MERGE"' },
+      shellVerify: { cmd: 'node "${DAGAIN_SHELL_VERIFIER:-${CHOREO_SHELL_VERIFIER:-$TASKGRAPH_SHELL_VERIFIER}}"' },
+      shellMerge: { cmd: 'node "${DAGAIN_SHELL_MERGE:-${CHOREO_SHELL_MERGE:-$TASKGRAPH_SHELL_MERGE}}"' },
       codex: { cmd: "codex exec --yolo --skip-git-repo-check -" },
       codexMedium: { cmd: "codex exec --yolo --skip-git-repo-check -m gpt-5.2-codex -c model_reasoning_effort=medium -" },
       // Note: Claude forbids --dangerously-skip-permissions when running as root/sudo.
@@ -51,10 +55,10 @@ export function defaultConfig() {
       finalVerifier: "codex",
       researcher: "codex"
     },
-	    supervisor: {
-	      workers: 1,
-	      idleSleepMs: 2000,
-	      staleLockSeconds: 3600,
+		    supervisor: {
+		      workers: 1,
+		      idleSleepMs: 2000,
+		      staleLockSeconds: 3600,
 	      autoResetFailedMax: 1,
 	      runnerPool: {
 	        mode: "off",

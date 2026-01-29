@@ -1,3 +1,7 @@
+<!-- Input — dagain users who want low-cost verification. If this file changes, update this header and the folder Markdown. -->
+<!-- Output — guidance for configuring shell verification. If this file changes, update this header and the folder Markdown. -->
+<!-- Position — user-facing docs shipped with the npm package. If this file changes, update this header and the folder Markdown. -->
+
 # Dagain Fast Config
 
 This profile minimizes full LLM invocations (especially verification) and reduces prompt size per node.
@@ -19,7 +23,7 @@ This profile minimizes full LLM invocations (especially verification) and reduce
     "verifyRunner": "shellVerify"
   },
   "runners": {
-    "shellVerify": { "cmd": "node \"$DAGAIN_SHELL_VERIFIER\"" },
+    "shellVerify": { "cmd": "node \"${DAGAIN_SHELL_VERIFIER:-${CHOREO_SHELL_VERIFIER:-$TASKGRAPH_SHELL_VERIFIER}}\"" },
     "codex": { "cmd": "codex exec --yolo --skip-git-repo-check -" }
   },
   "roles": {

@@ -334,7 +334,7 @@ function dagainRunnerEnv(paths, { nodeId, runId, parentNodeId = "", runMode = ""
   const shellVerifier = fileURLToPath(new URL("../scripts/shell-verifier.js", import.meta.url));
   const shellMerge = fileURLToPath(new URL("../scripts/shell-merge.js", import.meta.url));
   const mode = String(runMode || "").trim();
-  return {
+  const base = {
     DAGAIN_DB: paths.dbPath,
     DAGAIN_NODE_ID: nodeId,
     DAGAIN_RUN_ID: runId,
@@ -347,6 +347,17 @@ function dagainRunnerEnv(paths, { nodeId, runId, parentNodeId = "", runMode = ""
     DAGAIN_SHELL_MERGE: shellMerge,
     DAGAIN_RUN_MODE: mode,
   };
+
+  // Back-compat: older configs/scripts used CHOREO_* and/or TASKGRAPH_* env vars.
+  const aliases = {};
+  for (const [key, value] of Object.entries(base)) {
+    if (!key.startsWith("DAGAIN_")) continue;
+    const suffix = key.slice("DAGAIN_".length);
+    aliases[`CHOREO_${suffix}`] = value;
+    aliases[`TASKGRAPH_${suffix}`] = value;
+  }
+
+  return { ...base, ...aliases };
 }
 
 function envForIdentity(identity) {

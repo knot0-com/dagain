@@ -1,3 +1,7 @@
+// Input — node:child_process + sqlite helpers and env vars. If this file changes, update this header and the folder Markdown.
+// Output — `<result>{...}</result>` JSON for a verify runner. If this file changes, update this header and the folder Markdown.
+// Position — Built-in shell verifier runner for `verify_json` commands. If this file changes, update this header and the folder Markdown.
+
 import { spawn } from "node:child_process";
 
 import { sqliteQueryJson } from "../src/lib/db/sqlite3.js";
@@ -55,8 +59,8 @@ function runShellCommand(cmd, { cwd }) {
 }
 
 async function main() {
-  const dbPath = String(process.env.DAGAIN_DB || "").trim();
-  const nodeId = String(process.env.DAGAIN_NODE_ID || "").trim();
+  const dbPath = String(process.env.DAGAIN_DB || process.env.CHOREO_DB || process.env.TASKGRAPH_DB || "").trim();
+  const nodeId = String(process.env.DAGAIN_NODE_ID || process.env.CHOREO_NODE_ID || process.env.TASKGRAPH_NODE_ID || "").trim();
 
   if (!dbPath || !nodeId) {
     result({
@@ -64,10 +68,10 @@ async function main() {
       role: "verifier",
       nodeId,
       status: "fail",
-      summary: "Missing $DAGAIN_DB or $DAGAIN_NODE_ID",
+      summary: "Missing DB/node env vars for shell-verifier",
       next: { addNodes: [], setStatus: [] },
       checkpoint: null,
-      errors: ["Missing $DAGAIN_DB or $DAGAIN_NODE_ID"],
+      errors: ["Missing $DAGAIN_DB/$CHOREO_DB/$TASKGRAPH_DB or $DAGAIN_NODE_ID/$CHOREO_NODE_ID/$TASKGRAPH_NODE_ID"],
       confidence: 0,
     });
     return;
@@ -144,7 +148,7 @@ try {
   result({
     version: 1,
     role: "verifier",
-    nodeId: String(process.env.DAGAIN_NODE_ID || "").trim(),
+    nodeId: String(process.env.DAGAIN_NODE_ID || process.env.CHOREO_NODE_ID || process.env.TASKGRAPH_NODE_ID || "").trim(),
     status: "fail",
     summary: msg,
     next: { addNodes: [], setStatus: [] },

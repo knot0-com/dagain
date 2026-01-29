@@ -1,3 +1,7 @@
+// Input — `defaultConfig()` and CLI help output. If this file changes, update this header and the folder Markdown.
+// Output — test coverage for workers flag + defaults. If this file changes, update this header and the folder Markdown.
+// Position — regression tests for CLI/config behavior. If this file changes, update this header and the folder Markdown.
+
 import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
@@ -38,4 +42,12 @@ test("help: run documents --workers flag", async () => {
 test("defaultConfig: supervisor.workers defaults to 1", () => {
   const config = defaultConfig();
   assert.equal(config?.supervisor?.workers, 1);
+});
+
+test("defaultConfig: shellVerify cmd supports CHOREO_/TASKGRAPH_ fallbacks", () => {
+  const config = defaultConfig();
+  const cmd = String(config?.runners?.shellVerify?.cmd || "");
+  assert.match(cmd, /DAGAIN_SHELL_VERIFIER/);
+  assert.match(cmd, /CHOREO_SHELL_VERIFIER/);
+  assert.match(cmd, /TASKGRAPH_SHELL_VERIFIER/);
 });
