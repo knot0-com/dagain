@@ -1,8 +1,9 @@
 # Active Context
-*Last updated: 2026-01-29T04:36:26Z by codex*
+*Last updated: 2026-01-29T07:23:50Z by codex*
 
 ## Current System Status
-UI/TUI dashboards are shipped. `dagain run` now drops into chat on TTY so users can inspect run artifacts after completion.
+UI/TUI dashboards are shipped (web UI now themed + animated with improved DAG layout).
+Shell verifier/merge runner env is back-compat with older `CHOREO_*`/`TASKGRAPH_*` prefixes (prevents Node from executing the packet markdown as JS).
 
 ## Architecture Overview
 - `src/cli.js` routes `chat`, `tui`, `ui` commands.
@@ -11,19 +12,17 @@ UI/TUI dashboards are shipped. `dagain run` now drops into chat on TTY so users 
 - `src/tui/chat.js` renders a Blessed TUI with live DAG status and chat controls.
 
 ## Recent Changes
-- `src/cli.js:4126` adds `dagain ui`, `dagain tui`, and TTY-default `dagain chat` (with `--plain` fallback).
-- `src/cli.js:596` adds post-run chat (`--no-post-chat`) and prefixes `.dagain/runs/*` with node id for discoverability.
-- `src/tui/chat.js:541` adds `/artifacts [nodeId]` to surface run paths and last stdout/result paths.
-- `templates/executor.md:1` instructs runners to write non-source outputs under `$DAGAIN_ARTIFACTS_DIR/...` for discoverability.
-- `src/ui/server.js:113` adds a lightweight local dashboard server with SSE updates.
-- `src/tui/chat.js:119` adds a minimal terminal UI for live DAG viewing + chat.
-- `test/helpers/sqlite.js:7` adds a busy-timeout to reduce transient sqlite lock flakes in tests.
+- `src/ui/server.js:513` improves DAG layout (ordering sweeps + edge slotting) and adds knot0-style dark theme + subtle animations.
+- `src/cli.js:332` exports `DAGAIN_*` plus `CHOREO_*`/`TASKGRAPH_*` env aliases for runners.
+- `src/lib/config.js:37` makes default `shellVerify`/`shellMerge` commands fall back to `CHOREO_*`/`TASKGRAPH_*`.
+- `scripts/shell-verifier.js:61` and `scripts/shell-merge.js:50` accept `CHOREO_*`/`TASKGRAPH_*` env vars directly.
+- `test/shell-verifier.test.js:107` adds a regression test for `CHOREO_*` env support.
 
 ## In Progress
 (none)
 
 ## Next TODOs
-- [ ] Watch CI for `master` and npm publish workflow
+- [ ] Watch CI for `master` and npm publish workflow (tag + trusted publish)
 
 ## Blockers/Open Questions
 - Should `dagain tui` be dashboard-only, or keep chat embedded (current behavior)?
