@@ -8,11 +8,10 @@ DAG-based orchestration for coding agents (Codex, Claude Code, Gemini).
 
 Dagain runs a **work graph** (nodes + deps) stored in **SQLite**, and executes each node with a configured runner. It’s built to keep agents “fresh”: context is loaded from the graph/DB when needed, not carried indefinitely in prompts.
 
-> Back-compat: if a legacy `.taskgraph/` state dir exists, dagain migrates it to `.dagain/` and leaves a `.taskgraph` symlink. (CLI alias: `taskgraph`.)
 
 ## Docs
 
-- https://knot0.com/writing/taskgraph
+- https://knot0.com/writing/dagain
 
 ## Install
 
