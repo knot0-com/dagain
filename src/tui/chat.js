@@ -14,6 +14,7 @@ import { pathExists } from "../lib/fs.js";
 import { loadDashboardSnapshot } from "../lib/dashboard.js";
 import { kvGet, kvPut } from "../lib/db/kv.js";
 import { readSupervisorLock } from "../lib/lock.js";
+import { serveDashboard } from "../ui/server.js";
 
 function truncateText(value, maxLen) {
   const s = String(value || "");
@@ -132,7 +133,8 @@ export async function runChatTui(rootDir, flags) {
 
   const headerHeight = 5;
   const inputHeight = 3;
-  const guiUrl = "http://127.0.0.1:3876";
+  let guiUrl = "http://127.0.0.1:3876";
+  let uiServer = null;
 
   const screenOptions = { smartCSR: true, title: "dagain" };
   const explicitTerminal =
@@ -225,6 +227,21 @@ export async function runChatTui(rootDir, flags) {
   }
 
   log("dagain tui chat (type /help, tab to cycle focus, Ctrl+C to quit)");
+  try {
+    uiServer = await serveDashboard({ paths, host: "127.0.0.1", port: 3876 });
+    guiUrl = uiServer.url;
+  } catch (error) {
+    if (error?.code === "EADDRINUSE") {
+      try {
+        uiServer = await serveDashboard({ paths, host: "127.0.0.1", port: 0 });
+        guiUrl = uiServer.url;
+      } catch (fallbackError) {
+        log(`ui server error: ${fallbackError?.message || String(fallbackError)}`);
+      }
+    } else {
+      log(`ui server error: ${error?.message || String(error)}`);
+    }
+  }
 
   let dagListNodeIds = [];
   let selectedNodeId = "";
@@ -789,6 +806,7 @@ export async function runChatTui(rootDir, flags) {
 
   function cleanupAndExit() {
     if (pollTimer) clearInterval(pollTimer);
+    uiServer?.close?.().catch?.(() => {});
     try {
       screen.destroy();
     } catch {
