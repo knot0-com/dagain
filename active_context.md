@@ -1,8 +1,8 @@
 # Active Context
-*Last updated: 2026-01-29T03:09:34Z by codex*
+*Last updated: 2026-01-29T03:15:48Z by codex*
 
 ## Current System Status
-UI/TUI dashboard work is implemented locally and ready for final verification + commit.
+UI/TUI dashboard work is implemented, tests pass, and changes are pushed to `master`.
 
 ## Architecture Overview
 - `src/cli.js` routes `chat`, `tui`, `ui` commands.
@@ -11,16 +11,16 @@ UI/TUI dashboard work is implemented locally and ready for final verification + 
 - `src/tui/chat.js` renders a Blessed TUI with live DAG status and chat controls.
 
 ## Recent Changes
-- `src/cli.js` adds `dagain ui`, `dagain tui`, and `dagain chat --plain`.
-- `src/ui/server.js` adds a lightweight local dashboard server with SSE updates.
-- `src/tui/chat.js` adds a minimal terminal UI for live DAG viewing + chat.
+- `src/cli.js:4126` adds `dagain ui`, `dagain tui`, and TTY-default `dagain chat` (with `--plain` fallback).
+- `src/ui/server.js:113` adds a lightweight local dashboard server with SSE updates.
+- `src/tui/chat.js:119` adds a minimal terminal UI for live DAG viewing + chat.
+- `test/helpers/sqlite.js:7` adds a busy-timeout to reduce transient sqlite lock flakes in tests.
 
 ## In Progress
-Documentation/headers cleanup and final commit+push.
+(none)
 
 ## Next TODOs
-- [ ] Run `npm test`
-- [ ] Commit and push
+- [ ] Watch CI for `master` and npm publish workflow
 
 ## Blockers/Open Questions
 - Should `dagain tui` be dashboard-only, or keep chat embedded (current behavior)?
