@@ -130,6 +130,10 @@ export async function runChatTui(rootDir, flags) {
   const runnerOverride = typeof flags.runner === "string" ? flags.runner.trim() : "";
   const roleOverride = typeof flags.role === "string" ? flags.role.trim() : "planner";
 
+  const headerHeight = 4;
+  const inputHeight = 3;
+  const guiUrl = "http://127.0.0.1:3876";
+
   const screenOptions = { smartCSR: true, title: "dagain" };
   const explicitTerminal =
     typeof process.env.DAGAIN_TUI_TERMINAL === "string" ? process.env.DAGAIN_TUI_TERMINAL.trim() : "";
@@ -140,19 +144,40 @@ export async function runChatTui(rootDir, flags) {
   const header = blessed.box({
     top: 0,
     left: 0,
-    height: 3,
+    height: headerHeight,
     width: "100%",
     tags: true,
     border: "line",
     label: "dagain",
   });
-  const nodes = blessed.box({
-    top: 3,
+  const logBox = blessed.log({
+    top: headerHeight,
     left: 0,
-    bottom: 3,
+    bottom: inputHeight,
     width: "55%",
     border: "line",
-    label: "nodes",
+    label: "chat",
+    keys: true,
+    mouse: true,
+    tags: true,
+    vi: true,
+    scrollback: 10_000,
+    alwaysScroll: true,
+    scrollbar: { ch: " ", inverse: true },
+  });
+  const rightPane = blessed.box({
+    top: headerHeight,
+    left: "55%",
+    bottom: inputHeight,
+    width: "45%",
+  });
+  const dagList = blessed.list({
+    top: 0,
+    left: 0,
+    height: "55%",
+    width: "100%",
+    border: "line",
+    label: "dag",
     keys: true,
     mouse: true,
     tags: true,
@@ -160,24 +185,27 @@ export async function runChatTui(rootDir, flags) {
     scrollable: true,
     alwaysScroll: true,
     scrollbar: { ch: " ", inverse: true },
+    style: { selected: { bg: "blue" } },
   });
-  const logBox = blessed.log({
-    top: 3,
-    left: "55%",
-    bottom: 3,
-    width: "45%",
+  const nodeLogBox = blessed.box({
+    top: "55%",
+    left: 0,
+    bottom: 0,
+    width: "100%",
     border: "line",
-    label: "chat",
+    label: "node log",
     tags: true,
     keys: true,
     mouse: true,
-    scrollback: 10_000,
+    vi: true,
+    scrollable: true,
     alwaysScroll: true,
+    scrollbar: { ch: " ", inverse: true },
   });
   const input = blessed.textbox({
     bottom: 0,
     left: 0,
-    height: 3,
+    height: inputHeight,
     width: "100%",
     border: "line",
     label: "input",
@@ -185,8 +213,10 @@ export async function runChatTui(rootDir, flags) {
   });
 
   screen.append(header);
-  screen.append(nodes);
   screen.append(logBox);
+  screen.append(rightPane);
+  rightPane.append(dagList);
+  rightPane.append(nodeLogBox);
   screen.append(input);
 
   function log(line) {
@@ -194,7 +224,95 @@ export async function runChatTui(rootDir, flags) {
     screen.render();
   }
 
-  log("dagain tui chat (type /help, q to quit)");
+  log("dagain tui chat (type /help, tab to cycle focus, Ctrl+C to quit)");
+
+  let dagListNodeIds = [];
+  let selectedNodeId = "";
+  let lastLogAtMs = 0;
+
+  function statusBadge(node) {
+    if (node?.lock?.runId) return "RUN ";
+    const s = String(node?.status || "").toLowerCase();
+    if (s === "done") return "DONE";
+    if (s === "failed") return "FAIL";
+    if (s === "needs_human") return "HUMN";
+    return "OPEN";
+  }
+
+  function formatDagLine({ node, depth, nextId }) {
+    const badge = statusBadge(node);
+    const id = node?.id || "(missing-id)";
+    const type = node?.type ? truncateText(node.type, 10) : "";
+    const title = node?.title ? truncateText(node.title, 34) : "";
+    const deps = Array.isArray(node?.dependsOn) ? node.dependsOn : [];
+    const depsText = deps.length > 0 ? ` <- ${truncateText(deps.join(","), 44)}` : "";
+    const idText = nextId && id === nextId ? `{bold}${id}{/bold}` : id;
+    const indent = "  ".repeat(Math.max(0, depth));
+    return `${indent}${badge} ${idText}${type ? ` [${type}]` : ""}${title ? ` ${title}` : ""}${depsText}`;
+  }
+
+  function buildDagItems(nodes, nextId) {
+    const nodesById = new Map();
+    for (const n of nodes) nodesById.set(n.id, n);
+
+    const childrenByParent = new Map();
+    for (const n of nodes) {
+      const parentKey = n.parentId ?? "__root__";
+      const arr = childrenByParent.get(parentKey) || [];
+      arr.push(n);
+      childrenByParent.set(parentKey, arr);
+    }
+    for (const arr of childrenByParent.values()) arr.sort((a, b) => String(a?.id || "").localeCompare(String(b?.id || "")));
+
+    const seen = new Set();
+    const items = [];
+
+    function walk(node, depth) {
+      if (!node?.id) return;
+      if (seen.has(node.id)) return;
+      seen.add(node.id);
+      items.push({ nodeId: node.id, label: formatDagLine({ node, depth, nextId }) });
+      const children = childrenByParent.get(node.id) || [];
+      for (const child of children) walk(child, depth + 1);
+    }
+
+    const roots = childrenByParent.get("__root__") || [];
+    for (const r of roots) walk(r, 0);
+    for (const n of nodes) walk(n, 0);
+
+    return items;
+  }
+
+  async function refreshNodeLog({ force = false } = {}) {
+    const now = Date.now();
+    if (!force && now - lastLogAtMs < 1000) return;
+    lastLogAtMs = now;
+
+    const nodeId = String(selectedNodeId || "").trim();
+    const nodes = Array.isArray(lastSnapshot?.nodes) ? lastSnapshot.nodes : [];
+    const node = nodeId ? nodes.find((n) => n.id === nodeId) : null;
+    if (!node) {
+      nodeLogBox.setContent("Select a node in the dag panel to view its log.");
+      return;
+    }
+
+    const lockRunId = typeof node?.lock?.runId === "string" ? node.lock.runId : "";
+    let stdoutRel = "";
+    if (lockRunId) {
+      const stdoutPathAbs = path.join(paths.runsDir, lockRunId, "stdout.log");
+      stdoutRel = path.relative(paths.rootDir, stdoutPathAbs);
+    } else {
+      const stdoutRow = await kvGet({ dbPath: paths.dbPath, nodeId, key: "out.last_stdout_path" }).catch(() => null);
+      stdoutRel = typeof stdoutRow?.value_text === "string" ? stdoutRow.value_text.trim() : "";
+    }
+    const stdoutPathAbs = stdoutRel ? path.join(paths.rootDir, stdoutRel) : "";
+    const stdout = stdoutPathAbs ? await readTextTruncated(stdoutPathAbs, 10_000) : "";
+    const status = node.lock?.runId ? "running" : String(node.status || "open");
+    const meta = `${node.id} [${node.type || "?"}] (${status}) attempts=${node.attempts ?? 0}`;
+    const logLine = stdoutRel ? `log: ${stdoutRel}` : "log: (none)";
+    nodeLogBox.setContent(`${meta}\n${logLine}\n\n${stdout || "(empty)"}`);
+    nodeLogBox.setScrollPerc(100);
+  }
 
   function renderSnapshot(snapshot) {
     const counts = snapshot?.counts && typeof snapshot.counts === "object" ? snapshot.counts : {};
@@ -204,44 +322,65 @@ export async function runChatTui(rootDir, flags) {
       .join(" ");
     const nextText = snapshot?.next?.id ? `${snapshot.next.id} (${snapshot.next.type || "?"})` : "(none)";
     const sup = snapshot?.supervisor?.pid ? `pid=${snapshot.supervisor.pid} host=${snapshot.supervisor.host || "?"}` : "(none)";
-    header.setContent(`counts: ${countsText}\nnext: ${nextText}\nsupervisor: ${sup}`);
+    header.setContent(`counts: ${countsText}\nnext: ${nextText}\nsupervisor: ${sup}\ngui: ${guiUrl}`);
 
-    const col = (value, width) => truncateText(String(value ?? "").replace(/\s+/g, " "), width).padEnd(width, " ");
-    const headerLine = `{bold}${col("id", 16)} ${col("type", 10)} ${col("status", 12)} ${col("att", 3)} ${col(
-      "runner",
-      14,
-    )}{/bold}`;
-    const lines = [headerLine];
     const list = Array.isArray(snapshot?.nodes) ? snapshot.nodes : [];
-    for (const n of list) {
-      lines.push(
-        `${col(n.id || "", 16)} ${col(n.type || "", 10)} ${col(n.status || "", 12)} ${col(n.attempts ?? 0, 3)} ${col(
-          n.runner || "",
-          14,
-        )}`,
-      );
-    }
-    if (lines.length === 1) lines.push("(no nodes)");
-    const prevScroll = typeof nodes.getScroll === "function" ? nodes.getScroll() : 0;
-    nodes.setContent(lines.join("\n"));
-    if (typeof nodes.setScroll === "function") nodes.setScroll(prevScroll);
+    const nextId = typeof snapshot?.next?.id === "string" ? snapshot.next.id : "";
+    const items = buildDagItems(list, nextId);
+    const prevScroll = typeof dagList.getScroll === "function" ? dagList.getScroll() : 0;
+    dagListNodeIds = items.map((i) => i.nodeId);
+    dagList.setItems(items.map((i) => i.label));
+
+    const desiredSelected =
+      selectedNodeId && dagListNodeIds.includes(selectedNodeId)
+        ? selectedNodeId
+        : nextId && dagListNodeIds.includes(nextId)
+          ? nextId
+          : dagListNodeIds[0] || "";
+    selectedNodeId = desiredSelected;
+    const idx = selectedNodeId ? dagListNodeIds.indexOf(selectedNodeId) : -1;
+    if (idx >= 0) dagList.select(idx);
+    if (typeof dagList.setScroll === "function") dagList.setScroll(prevScroll);
   }
 
   let lastSnapshot = null;
   let pollTimer = null;
+  let polling = false;
   async function poll() {
+    if (polling) return;
+    polling = true;
     try {
       const snap = await loadDashboardSnapshot({ paths });
       lastSnapshot = snap;
       renderSnapshot(snap);
+      await refreshNodeLog();
       screen.render();
     } catch (error) {
       log(`snapshot error: ${error?.message || String(error)}`);
+    } finally {
+      polling = false;
     }
   }
 
   pollTimer = setInterval(poll, 500);
   await poll();
+
+  dagList.on("select", async (_item, index) => {
+    const i = Number(index);
+    const next = Number.isFinite(i) ? dagListNodeIds[i] : "";
+    if (next) selectedNodeId = next;
+    await refreshNodeLog({ force: true });
+    screen.render();
+  });
+
+  dagList.on("keypress", async () => {
+    const idx = typeof dagList.selected === "number" ? dagList.selected : -1;
+    const next = idx >= 0 ? dagListNodeIds[idx] : "";
+    if (!next || next === selectedNodeId) return;
+    selectedNodeId = next;
+    await refreshNodeLog({ force: true });
+    screen.render();
+  });
 
   async function showMemory() {
     const chatNodeId = "__run__";
@@ -654,7 +793,23 @@ export async function runChatTui(rootDir, flags) {
     }
   }
 
-  screen.key(["q", "C-c"], () => {
+  const focusOrder = [input, dagList, nodeLogBox];
+  function cycleFocus(delta) {
+    const focused = screen.focused;
+    const idx = focusOrder.indexOf(focused);
+    const nextIdx = idx === -1 ? 0 : (idx + delta + focusOrder.length) % focusOrder.length;
+    focusOrder[nextIdx]?.focus?.();
+    screen.render();
+  }
+
+  screen.key(["tab"], () => cycleFocus(1));
+  screen.key(["S-tab"], () => cycleFocus(-1));
+  screen.key(["escape"], () => {
+    input.focus();
+    screen.render();
+  });
+
+  screen.program.key(["C-c"], () => {
     cleanupAndExit();
     process.exit(0);
   });
