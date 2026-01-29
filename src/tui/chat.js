@@ -130,7 +130,13 @@ export async function runChatTui(rootDir, flags) {
   const runnerOverride = typeof flags.runner === "string" ? flags.runner.trim() : "";
   const roleOverride = typeof flags.role === "string" ? flags.role.trim() : "planner";
 
-  const screen = blessed.screen({ smartCSR: true, title: "dagain" });
+  const screenOptions = { smartCSR: true, title: "dagain" };
+  const explicitTerminal =
+    typeof process.env.DAGAIN_TUI_TERMINAL === "string" ? process.env.DAGAIN_TUI_TERMINAL.trim() : "";
+  if (explicitTerminal) screenOptions.terminal = explicitTerminal;
+  else if (process.env.TERM === "screen-256color") screenOptions.terminal = "xterm-256color";
+
+  const screen = blessed.screen(screenOptions);
   const header = blessed.box({
     top: 0,
     left: 0,
@@ -140,7 +146,7 @@ export async function runChatTui(rootDir, flags) {
     border: "line",
     label: "dagain",
   });
-  const nodes = blessed.listtable({
+  const nodes = blessed.box({
     top: 3,
     left: 0,
     bottom: 3,
@@ -151,7 +157,9 @@ export async function runChatTui(rootDir, flags) {
     mouse: true,
     tags: true,
     vi: true,
-    style: { header: { bold: true }, cell: { selected: { bg: "blue" } } },
+    scrollable: true,
+    alwaysScroll: true,
+    scrollbar: { ch: " ", inverse: true },
   });
   const logBox = blessed.log({
     top: 3,
@@ -198,12 +206,25 @@ export async function runChatTui(rootDir, flags) {
     const sup = snapshot?.supervisor?.pid ? `pid=${snapshot.supervisor.pid} host=${snapshot.supervisor.host || "?"}` : "(none)";
     header.setContent(`counts: ${countsText}\nnext: ${nextText}\nsupervisor: ${sup}`);
 
-    const rows = [["id", "type", "status", "att", "runner"]];
+    const col = (value, width) => truncateText(String(value ?? "").replace(/\s+/g, " "), width).padEnd(width, " ");
+    const headerLine = `{bold}${col("id", 16)} ${col("type", 10)} ${col("status", 12)} ${col("att", 3)} ${col(
+      "runner",
+      14,
+    )}{/bold}`;
+    const lines = [headerLine];
     const list = Array.isArray(snapshot?.nodes) ? snapshot.nodes : [];
     for (const n of list) {
-      rows.push([String(n.id || ""), String(n.type || ""), String(n.status || ""), String(n.attempts ?? 0), String(n.runner || "")]);
+      lines.push(
+        `${col(n.id || "", 16)} ${col(n.type || "", 10)} ${col(n.status || "", 12)} ${col(n.attempts ?? 0, 3)} ${col(
+          n.runner || "",
+          14,
+        )}`,
+      );
     }
-    nodes.setData(rows);
+    if (lines.length === 1) lines.push("(no nodes)");
+    const prevScroll = typeof nodes.getScroll === "function" ? nodes.getScroll() : 0;
+    nodes.setContent(lines.join("\n"));
+    if (typeof nodes.setScroll === "function") nodes.setScroll(prevScroll);
   }
 
   let lastSnapshot = null;
