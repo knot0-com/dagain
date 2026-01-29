@@ -130,7 +130,7 @@ export async function runChatTui(rootDir, flags) {
   const runnerOverride = typeof flags.runner === "string" ? flags.runner.trim() : "";
   const roleOverride = typeof flags.role === "string" ? flags.role.trim() : "planner";
 
-  const headerHeight = 4;
+  const headerHeight = 5;
   const inputHeight = 3;
   const guiUrl = "http://127.0.0.1:3876";
 
@@ -322,7 +322,10 @@ export async function runChatTui(rootDir, flags) {
       .join(" ");
     const nextText = snapshot?.next?.id ? `${snapshot.next.id} (${snapshot.next.type || "?"})` : "(none)";
     const sup = snapshot?.supervisor?.pid ? `pid=${snapshot.supervisor.pid} host=${snapshot.supervisor.host || "?"}` : "(none)";
-    header.setContent(`counts: ${countsText}\nnext: ${nextText}\nsupervisor: ${sup}\ngui: ${guiUrl}`);
+    const line1 = `counts: ${truncateText(countsText, 80)}  next: ${truncateText(nextText, 60)}`;
+    const line2 = `supervisor: ${truncateText(sup, 80)}`;
+    const line3 = `gui: ${guiUrl}`;
+    header.setContent(`${line1}\n${line2}\n${line3}`);
 
     const list = Array.isArray(snapshot?.nodes) ? snapshot.nodes : [];
     const nextId = typeof snapshot?.next?.id === "string" ? snapshot.next.id : "";
