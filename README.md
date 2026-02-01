@@ -46,7 +46,7 @@ dagain chat --plain  # force the plain readline REPL (useful for piping / non-TT
 
 # 4) optional: live dashboards
 dagain tui           # terminal dashboard + chat (shows a GUI URL)
-dagain ui            # web dashboard (animated DAG graph + log tail + controls)
+dagain ui            # web dashboard (chat left + DAG + node logs, runs drawer, pan/zoom+fit, controls)
 ```
 
 ### Common chat controls

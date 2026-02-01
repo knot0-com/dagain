@@ -1,16 +1,20 @@
-// Input — node:http/crypto/fs/path + dagain DB snapshot/control helpers. If this file changes, update this header and the folder Markdown.
-// Output — `serveDashboard()` local HTTP dashboard server (HTML+SSE+control/log API). If this file changes, update this header and the folder Markdown.
-// Position — Minimal web UI for live DAG viewing (animated layout) and safe controls. If this file changes, update this header and the folder Markdown.
+// Input — node:http/crypto/fs/path/child_process/url + dagain DB snapshot/kv/control helpers. If this file changes, update this header and the folder Markdown.
+// Output — `serveDashboard()` local HTTP dashboard server (HTML+SSE+control/log/chat APIs). If this file changes, update this header and the folder Markdown.
+// Position — Minimal web UI for live DAG viewing (animated layout + pan/zoom + chat) and safe controls. If this file changes, update this header and the folder Markdown.
 
 import http from "node:http";
 import { randomBytes } from "node:crypto";
-import { open } from "node:fs/promises";
+import { open, readdir, readFile, rm, unlink } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 import { loadDashboardSnapshot } from "../lib/dashboard.js";
-import { kvGet } from "../lib/db/kv.js";
+import { kvGet, kvPut } from "../lib/db/kv.js";
 import { mailboxEnqueue } from "../lib/db/mailbox.js";
 import { ensureMailboxTable } from "../lib/db/migrate.js";
+import { loadConfig, saveConfig, defaultConfig } from "../lib/config.js";
 
 function json(res, status, body) {
   const text = JSON.stringify(body, null, 2) + "\n";
@@ -34,6 +38,47 @@ function safeJsonParse(text, fallback = null) {
   } catch {
     return fallback;
   }
+}
+
+function truncateText(value, maxLen) {
+  const s = String(value ?? "");
+  const n = Number(maxLen);
+  const limit = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  if (!limit) return "";
+  if (s.length <= limit) return s;
+  return s.slice(0, Math.max(0, limit - 1)) + "\u2026";
+}
+
+function formatNodeLine(node) {
+  const id = node?.id || "(missing-id)";
+  const title = node?.title || "(untitled)";
+  const type = node?.type || "(type?)";
+  const status = node?.status || (node?.lock?.runId ? "in_progress" : "(status?)");
+  return `${id} [${type}] (${status}) \u2014 ${title}`;
+}
+
+function dagainBinPath() {
+  return fileURLToPath(new URL("../../bin/dagain.js", import.meta.url));
+}
+
+function runCliCapture({ cwd, args }) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [dagainBinPath(), ...args], {
+      cwd,
+      env: { ...process.env, NO_COLOR: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (d) => (stdout += d));
+    child.stderr.on("data", (d) => (stderr += d));
+    child.on("close", (code, signal) => resolve({ code: code ?? 0, signal: signal ?? null, stdout, stderr }));
+    child.on("error", (err) =>
+      resolve({ code: 1, signal: null, stdout: "", stderr: String(err?.message || err || "spawn error") }),
+    );
+  });
 }
 
 async function readJsonBody(req, { maxBytes = 64_000 } = {}) {
@@ -97,899 +142,28 @@ function safeResolveUnderRoot(rootDir, relPath) {
   return resolved;
 }
 
-function homeHtml({ token }) {
-  return `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>dagain</title>
-    <style>
-      :root {
-        color-scheme: dark;
-
-        /* Knot0 theme (knot0-www/app/globals.css) */
-        --black: #0a0a0a;
-        --blackLight: #141414;
-        --blackBorder: #1f1f1f;
-        --amber: #ffb000;
-        --amberDim: #b37a00;
-        --cyan: #4ecdc4;
-        --cyanDim: #2a9d8f;
-        --white: #e8e8e8;
-        --whiteDim: #a8a8a8;
-        --whiteMuted: #555555;
-        --green: #39ff14;
-        --red: #ff4444;
-        --purple: #a855f7;
-
-        --bg: var(--black);
-        --panel: var(--blackLight);
-        --panel2: rgba(255, 255, 255, 0.03);
-        --border: var(--blackBorder);
-        --muted: var(--whiteDim);
-        --muted2: var(--whiteMuted);
-        --text: var(--white);
-        --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-        --sans: var(--mono);
-      }
-
-      * { box-sizing: border-box; }
-      html, body { height: 100%; }
-      body { margin: 0; font-family: var(--mono); background: var(--bg); color: var(--text); }
-
-      /* subtle grain + scanlines (CSS-only) */
-      body::before {
-        content: "";
-        position: fixed;
-        inset: 0;
-        background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
-        opacity: 0.03;
-        pointer-events: none;
-        z-index: 0;
-      }
-      body::after {
-        content: "";
-        position: fixed;
-        inset: 0;
-        background: repeating-linear-gradient(
-          0deg,
-          transparent,
-          transparent 2px,
-          rgba(0, 0, 0, 0.18) 2px,
-          rgba(0, 0, 0, 0.18) 4px
-        );
-        opacity: 0.02;
-        pointer-events: none;
-        z-index: 0;
-      }
-      header, main { position: relative; z-index: 1; }
-
-      header { padding: 12px 14px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: rgba(10, 10, 10, 0.95); backdrop-filter: blur(10px); }
-      .top { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; justify-content: space-between; }
-      .brand { display: flex; gap: 10px; align-items: center; }
-      .brand h1 { margin: 0; font-size: 14px; letter-spacing: .02em; color: var(--amber); }
-      .pills { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-      .pill { padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px; font-size: 12px; background: var(--panel); color: var(--muted); }
-      .pill code { font-family: var(--mono); font-size: 12px; }
-      .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: flex-end; }
-      .btn {
-        font-size: 12px;
-        padding: 6px 10px;
-        border-radius: 10px;
-        border: 1px solid var(--border);
-        background: var(--panel);
-        color: var(--text);
-        cursor: pointer;
-        transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease;
-      }
-      .btn:hover { background: rgba(255, 255, 255, 0.04); border-color: rgba(78, 205, 196, 0.35); }
-      .btn:disabled { opacity: .5; cursor: not-allowed; }
-      .btn.primary { border-color: rgba(255, 176, 0, 0.55); color: var(--amber); }
-      .btn.primary:hover { background: rgba(255, 176, 0, 0.08); border-color: rgba(255, 176, 0, 0.75); }
-      .btn.danger { border-color: rgba(255, 68, 68, 0.55); color: var(--red); }
-      .btn.danger:hover { background: rgba(255, 68, 68, 0.08); border-color: rgba(255, 68, 68, 0.75); }
-      .input {
-        font-size: 12px;
-        padding: 6px 10px;
-        border-radius: 10px;
-        border: 1px solid var(--border);
-        background: var(--panel);
-        color: var(--text);
-        width: 88px;
-      }
-      .input:focus { outline: none; border-color: rgba(255, 176, 0, 0.55); }
-      main { display: grid; grid-template-columns: 1.35fr 1fr; gap: 12px; padding: 12px; }
-      .card { border: 1px solid var(--border); border-radius: 14px; background: var(--panel); overflow: hidden; min-height: 120px; }
-      .cardHeader { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; gap: 10px; justify-content: space-between; align-items: center; }
-      .cardHeader h2 { margin: 0; font-size: 12px; letter-spacing: .03em; text-transform: uppercase; color: var(--muted2); }
-      .cardBody { padding: 12px; }
-      .mono { font-family: var(--mono); font-size: 12px; }
-      .muted { color: var(--muted); }
-      .status { display: inline-flex; align-items: center; gap: 6px; }
-      .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--muted); }
-      .dot.open { background: var(--whiteMuted); }
-      .dot.in_progress { background: var(--amber); }
-      .dot.done { background: var(--green); }
-      .dot.failed { background: var(--red); }
-      .dot.needs_human { background: var(--purple); }
-
-      #graphWrap {
-        height: 540px;
-        overflow: auto;
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        background: var(--bg);
-        scrollbar-width: thin;
-        scrollbar-color: rgba(255,255,255,0.18) transparent;
-      }
-      #graphWrap::-webkit-scrollbar { width: 8px; height: 8px; }
-      #graphWrap::-webkit-scrollbar-track { background: transparent; }
-      #graphWrap::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 999px; }
-      #graphWrap::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.28); }
-      #graph { display: block; }
-      .node { cursor: pointer; }
-      .node { transition: filter 160ms ease; }
-      .node rect { fill: var(--blackLight); stroke: rgba(255,255,255,0.14); stroke-width: 1; }
-      .node:hover rect { stroke: rgba(78, 205, 196, 0.55); }
-      .node.selected rect { stroke: var(--cyan); stroke-width: 2; }
-      .node.next rect { stroke: rgba(78, 205, 196, 0.85); }
-
-      .node.st-open rect { stroke: rgba(255,255,255,0.16); }
-      .node.st-in_progress rect { stroke: rgba(255,176,0,0.85); stroke-width: 2; fill: rgba(255,176,0,0.08); }
-      .node.st-done rect { stroke: rgba(57,255,20,0.6); fill: rgba(57,255,20,0.05); }
-      .node.st-failed rect { stroke: rgba(255,68,68,0.75); fill: rgba(255,68,68,0.08); }
-      .node.st-needs_human rect { stroke: rgba(168,85,247,0.75); fill: rgba(168,85,247,0.08); }
-
-      @keyframes glowAmber {
-        0%, 100% { filter: drop-shadow(0 0 6px rgba(255, 176, 0, 0.18)); }
-        50% { filter: drop-shadow(0 0 16px rgba(255, 176, 0, 0.33)); }
-      }
-      @keyframes glowPurple {
-        0%, 100% { filter: drop-shadow(0 0 6px rgba(168, 85, 247, 0.18)); }
-        50% { filter: drop-shadow(0 0 16px rgba(168, 85, 247, 0.33)); }
-      }
-      .node.st-in_progress { animation: glowAmber 1.4s ease-in-out infinite; }
-      .node.st-needs_human { animation: glowPurple 1.6s ease-in-out infinite; }
-
-      .node text { font-family: var(--mono); fill: var(--text); }
-      .nodeDot { fill: var(--whiteMuted); }
-      .node.st-open .nodeDot { fill: var(--whiteMuted); }
-      .node.st-in_progress .nodeDot { fill: var(--amber); }
-      .node.st-done .nodeDot { fill: var(--green); }
-      .node.st-failed .nodeDot { fill: var(--red); }
-      .node.st-needs_human .nodeDot { fill: var(--purple); }
-      .nodeId { font-size: 12px; dominant-baseline: middle; }
-      .nodeSub { font-size: 11px; dominant-baseline: middle; fill: var(--muted); }
-
-      .edge { stroke: var(--blackBorder); stroke-width: 1.25; fill: none; opacity: 0.85; transition: stroke 160ms ease, stroke-width 160ms ease, opacity 160ms ease; }
-      .edge.dep { stroke: var(--blackBorder); }
-      .edge.parent { stroke-dasharray: 6 6; opacity: 0.5; }
-      .edge.active { stroke: var(--cyan); stroke-width: 2; opacity: 1; }
-      .edge.next { stroke: rgba(255,176,0,0.75); opacity: 0.95; }
-
-      .log { height: 280px; overflow: auto; background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 12px; padding: 10px; white-space: pre-wrap; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.18) transparent; }
-      .log::-webkit-scrollbar { width: 8px; height: 8px; }
-      .log::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 999px; }
-      .log::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.28); }
-      .toast { font-size: 12px; padding-top: 8px; min-height: 18px; color: var(--muted); }
-
-      @media (prefers-reduced-motion: reduce) {
-        *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
-      }
-    </style>
-  </head>
-  <body>
-    <script>window.__DAGAIN = { token: ${JSON.stringify(String(token || ""))} };</script>
-    <header>
-      <div class="top">
-        <div class="brand">
-          <h1>dagain</h1>
-          <div class="pills">
-            <span class="pill">now: <code id="nowIso">…</code></span>
-            <span class="pill">next: <code id="next">…</code></span>
-            <span class="pill">supervisor: <code id="supervisor">…</code></span>
-          </div>
-        </div>
-        <div class="controls">
-          <button class="btn" id="pause">Pause</button>
-          <button class="btn" id="resume">Resume</button>
-          <button class="btn primary" id="replan">Replan</button>
-          <input class="input" id="workers" placeholder="workers" inputmode="numeric" />
-          <button class="btn" id="setWorkers">Set</button>
-        </div>
-      </div>
-      <div class="toast" id="toast"></div>
-    </header>
-
-    <main>
-      <section class="card">
-        <div class="cardHeader">
-          <h2>DAG</h2>
-          <div class="muted mono" id="counts"></div>
-        </div>
-        <div class="cardBody">
-          <div id="graphWrap">
-            <svg id="graph" role="img" aria-label="dag graph"></svg>
-          </div>
-        </div>
-      </section>
-      <aside class="card">
-        <div class="cardHeader">
-          <h2>Selection</h2>
-          <button class="btn danger" id="cancel" disabled>Cancel node</button>
-        </div>
-        <div class="cardBody">
-          <div class="mono">
-            <div><span class="muted">id:</span> <span id="selId">—</span></div>
-            <div><span class="muted">type:</span> <span id="selType">—</span></div>
-            <div><span class="muted">status:</span> <span class="status"><span class="dot" id="selDot"></span><span id="selStatus">—</span></span></div>
-            <div><span class="muted">attempts:</span> <span id="selAttempts">—</span></div>
-            <div><span class="muted">runner:</span> <span id="selRunner">—</span></div>
-            <div><span class="muted">deps:</span> <span id="selDeps">—</span></div>
-            <div><span class="muted">parent:</span> <span id="selParent">—</span></div>
-            <div><span class="muted">log:</span> <span id="selLogPath">—</span></div>
-          </div>
-          <div style="height:10px"></div>
-          <div class="log mono" id="log">(select a node)</div>
-        </div>
-      </aside>
-    </main>
-    <script>
-      const token = (window.__DAGAIN && window.__DAGAIN.token) ? window.__DAGAIN.token : "";
-
-      const elNow = document.getElementById("nowIso");
-      const elNext = document.getElementById("next");
-      const elCounts = document.getElementById("counts");
-      const elSupervisor = document.getElementById("supervisor");
-      const elToast = document.getElementById("toast");
-      const elGraphWrap = document.getElementById("graphWrap");
-      const elGraph = document.getElementById("graph");
-      const elLog = document.getElementById("log");
-
-      const elSelId = document.getElementById("selId");
-      const elSelType = document.getElementById("selType");
-      const elSelStatus = document.getElementById("selStatus");
-      const elSelDot = document.getElementById("selDot");
-      const elSelAttempts = document.getElementById("selAttempts");
-      const elSelRunner = document.getElementById("selRunner");
-      const elSelDeps = document.getElementById("selDeps");
-      const elSelParent = document.getElementById("selParent");
-      const elSelLogPath = document.getElementById("selLogPath");
-
-      const btnPause = document.getElementById("pause");
-      const btnResume = document.getElementById("resume");
-      const btnReplan = document.getElementById("replan");
-      const inpWorkers = document.getElementById("workers");
-      const btnSetWorkers = document.getElementById("setWorkers");
-      const btnCancel = document.getElementById("cancel");
-
-      const ns = "http://www.w3.org/2000/svg";
-      let svgReady = false;
-      let edgesLayer = null;
-      let nodesLayer = null;
-      const nodeElById = new Map();
-      const edgeElByKey = new Map();
-      let lastGraph = null;
-      let lastAutoScrollId = "";
-
-      function fmtSupervisor(s) {
-        if (!s || !s.pid) return "(none)";
-        return "pid=" + s.pid + (s.host ? " host=" + s.host : "");
-      }
-
-      function fmtNext(n) {
-        if (!n || !n.id) return "(none)";
-        return n.id + " [" + (n.type || "?") + "] (" + (n.status || "?") + ")";
-      }
-
-      function toast(msg) {
-        elToast.textContent = msg || "";
-      }
-
-      async function postJson(url, body) {
-        const res = await fetch(url, {
-          method: "POST",
-          headers: { "content-type": "application/json", "x-dagain-token": token },
-          body: JSON.stringify(body || {}),
-        });
-        const data = await res.json().catch(() => null);
-        if (!res.ok) throw new Error((data && data.error) ? data.error : ("HTTP " + res.status));
-        return data;
-      }
-
-      async function fetchLog(nodeId) {
-        const id = nodeId || "";
-        if (!id) return { path: "", text: "" };
-        const res = await fetch("/api/node/log?id=" + encodeURIComponent(id) + "&tail=10000");
-        const data = await res.json().catch(() => null);
-        if (!res.ok) throw new Error((data && data.error) ? data.error : ("HTTP " + res.status));
-        return data;
-      }
-
-      function layerDag(nodes) {
-        const byId = new Map();
-        for (const n of nodes) if (n && n.id) byId.set(n.id, n);
-
-        const indeg = new Map();
-        const out = new Map();
-        for (const id of byId.keys()) {
-          indeg.set(id, 0);
-          out.set(id, []);
-        }
-        for (const n of nodes) {
-          const to = n && n.id ? n.id : "";
-          if (!to) continue;
-          const deps = new Set(Array.isArray(n.dependsOn) ? n.dependsOn : []);
-          if (n && n.parentId) deps.add(n.parentId);
-          for (const from of deps) {
-            if (!byId.has(from)) continue;
-            out.get(from).push(to);
-            indeg.set(to, (indeg.get(to) || 0) + 1);
-          }
-        }
-
-        const q = [];
-        for (const [id, d] of indeg.entries()) if (d === 0) q.push(id);
-        q.sort();
-        const order = [];
-        while (q.length) {
-          const id = q.shift();
-          order.push(id);
-          for (const nxt of out.get(id) || []) {
-            indeg.set(nxt, (indeg.get(nxt) || 0) - 1);
-            if (indeg.get(nxt) === 0) q.push(nxt);
-          }
-          q.sort();
-        }
-
-        const layer = new Map();
-        for (const id of byId.keys()) layer.set(id, 0);
-        for (const id of order) {
-          const n = byId.get(id);
-          const deps = new Set(Array.isArray(n.dependsOn) ? n.dependsOn : []);
-          if (n && n.parentId) deps.add(n.parentId);
-          let best = 0;
-          for (const dep of deps) best = Math.max(best, (layer.get(dep) || 0) + 1);
-          layer.set(id, best);
-        }
-        return { byId, layer };
-      }
-
-      function statusKey(n) {
-        const s = (n && n.status) ? String(n.status) : "";
-        return s.toLowerCase();
-      }
-
-      function statusDotClass(n) {
-        const s = statusKey(n);
-        if (s === "in_progress") return "in_progress";
-        if (s === "done") return "done";
-        if (s === "failed") return "failed";
-        if (s === "needs_human") return "needs_human";
-        return "open";
-      }
-
-      function truncateText(value, maxLen) {
-        const s = String(value || "");
-        const n = Number(maxLen);
-        const limit = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
-        if (!limit) return "";
-        if (s.length <= limit) return s;
-        return s.slice(0, Math.max(0, limit - 1)) + "…";
-      }
-
-      function nodeLines(n) {
-        const id = (n && n.id) ? String(n.id) : "";
-        const type = (n && n.type) ? String(n.type) : "";
-        const title = (n && n.title) ? String(n.title) : "";
-        const top = type ? (id + " [" + type + "]") : id;
-        const bottom = title ? title : "(" + (statusKey(n) || "open") + ")";
-        return { top: truncateText(top, 30), bottom: truncateText(bottom, 36) };
-      }
-
-      function buildAdjacency({ nodes, byId }) {
-        const preds = new Map();
-        const succs = new Map();
-        for (const n of nodes) {
-          if (!n || !n.id) continue;
-          preds.set(n.id, []);
-          succs.set(n.id, []);
-        }
-        for (const n of nodes) {
-          const to = n && n.id ? n.id : "";
-          if (!to || !preds.has(to)) continue;
-          const deps = new Set(Array.isArray(n.dependsOn) ? n.dependsOn : []);
-          if (n && n.parentId) deps.add(n.parentId);
-          for (const from of deps) {
-            if (!byId.has(from) || !succs.has(from)) continue;
-            preds.get(to).push(from);
-            succs.get(from).push(to);
-          }
-        }
-        return { preds, succs };
-      }
-
-      function orderLayers({ layers, adjacency, layerById }) {
-        const rowById = new Map();
-        for (let i = 0; i < layers.length; i++) {
-          const col = layers[i];
-          for (let r = 0; r < col.length; r++) rowById.set(col[r].id, r);
-        }
-
-        function scoreFor(id, neighborIds, currentLayer) {
-          const neigh = Array.isArray(neighborIds) ? neighborIds : [];
-          let sum = 0;
-          let wsum = 0;
-          for (const nb of neigh) {
-            const nbLayer = layerById.get(nb);
-            if (typeof nbLayer !== "number") continue;
-            const nbRow = rowById.get(nb);
-            if (typeof nbRow !== "number") continue;
-            const dist = Math.abs(currentLayer - nbLayer);
-            const w = 1 / Math.max(1, dist);
-            sum += nbRow * w;
-            wsum += w;
-          }
-          if (wsum) return sum / wsum;
-          return rowById.get(id) || 0;
-        }
-
-        function reorderLayer(layerIndex, dir) {
-          const col = layers[layerIndex];
-          if (!Array.isArray(col) || col.length <= 1) return;
-          const scored = col.map((n) => {
-            const neighbors = dir === "down" ? adjacency.preds.get(n.id) : adjacency.succs.get(n.id);
-            return { n, s: scoreFor(n.id, neighbors, layerIndex), t: String(n.id || "") };
-          });
-          scored.sort((a, b) => (a.s - b.s) || a.t.localeCompare(b.t));
-          layers[layerIndex] = scored.map((x) => x.n);
-          for (let r = 0; r < layers[layerIndex].length; r++) rowById.set(layers[layerIndex][r].id, r);
-        }
-
-        const iters = 4;
-        for (let k = 0; k < iters; k++) {
-          for (let i = 1; i < layers.length; i++) reorderLayer(i, "down");
-          for (let i = layers.length - 2; i >= 0; i--) reorderLayer(i, "up");
-        }
-      }
-
-      function assignEdgeSlots(edges) {
-        const outgoing = new Map();
-        const incoming = new Map();
-        for (const e of edges) {
-          if (!e || !e.from || !e.to) continue;
-          const out = outgoing.get(e.from) || [];
-          out.push(e);
-          outgoing.set(e.from, out);
-          const inc = incoming.get(e.to) || [];
-          inc.push(e);
-          incoming.set(e.to, inc);
-        }
-        for (const list of outgoing.values()) {
-          list.sort((a, b) => String(a.kind || "").localeCompare(String(b.kind || "")) || String(a.to).localeCompare(String(b.to)));
-          const n = list.length;
-          for (let i = 0; i < n; i++) {
-            list[i].fromSlot = i;
-            list[i].fromSlots = n;
-          }
-        }
-        for (const list of incoming.values()) {
-          list.sort(
-            (a, b) => String(a.kind || "").localeCompare(String(b.kind || "")) || String(a.from).localeCompare(String(b.from)),
-          );
-          const n = list.length;
-          for (let i = 0; i < n; i++) {
-            list[i].toSlot = i;
-            list[i].toSlots = n;
-          }
-        }
-        for (const e of edges) {
-          if (typeof e.fromSlots !== "number") {
-            e.fromSlot = 0;
-            e.fromSlots = 1;
-          }
-          if (typeof e.toSlots !== "number") {
-            e.toSlot = 0;
-            e.toSlots = 1;
-          }
-        }
-      }
-
-      function buildGraph(snapshot, selectedId) {
-        const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
-        const nextId = snapshot && snapshot.next && snapshot.next.id ? snapshot.next.id : "";
-        const { byId, layer } = layerDag(nodes);
-        const maxLayer = Math.max(0, ...Array.from(layer.values()));
-        const layers = Array.from({ length: maxLayer + 1 }, () => []);
-        for (const n of nodes) {
-          if (!n || !n.id) continue;
-          layers[layer.get(n.id) || 0].push(n);
-        }
-        for (const col of layers) col.sort((a, b) => String(a.id).localeCompare(String(b.id)));
-
-        const layerById = new Map();
-        for (let c = 0; c < layers.length; c++) for (const n of layers[c]) layerById.set(n.id, c);
-        const adjacency = buildAdjacency({ nodes, byId });
-        orderLayers({ layers, adjacency, layerById });
-
-        const nodeW = 240;
-        const nodeH = 54;
-        const colGap = 90;
-        const rowGap = 22;
-        const pad = 24;
-
-        const pos = new Map();
-        const colHeights = [];
-        for (let c = 0; c < layers.length; c++) {
-          const col = layers[c];
-          colHeights[c] = pad + col.length * (nodeH + rowGap) - rowGap + pad;
-        }
-        const h = Math.max(320, ...colHeights);
-        const w = pad + layers.length * (nodeW + colGap) - colGap + pad;
-        for (let c = 0; c < layers.length; c++) {
-          const col = layers[c];
-          for (let r = 0; r < col.length; r++) {
-            const n = col[r];
-            const x = pad + c * (nodeW + colGap);
-            const y = pad + r * (nodeH + rowGap);
-            pos.set(n.id, { x, y, w: nodeW, h: nodeH });
-          }
-        }
-
-        const edges = [];
-        for (const n of nodes) {
-          if (!n || !n.id) continue;
-          const deps = Array.isArray(n.dependsOn) ? n.dependsOn : [];
-          for (const from of deps) {
-            if (!pos.has(from) || !pos.has(n.id)) continue;
-            edges.push({ from, to: n.id, kind: "dep" });
-          }
-          if (n.parentId && pos.has(n.parentId) && !deps.includes(n.parentId))
-            edges.push({ from: n.parentId, to: n.id, kind: "parent" });
-        }
-
-        assignEdgeSlots(edges);
-        return { nodes, byId, pos, edges, w, h, selectedId, nextId };
-      }
-
-      function ensureSvg() {
-        if (svgReady) return;
-        svgReady = true;
-
-        const defs = document.createElementNS(ns, "defs");
-        const marker = document.createElementNS(ns, "marker");
-        marker.setAttribute("id", "arrow");
-        marker.setAttribute("markerWidth", "10");
-        marker.setAttribute("markerHeight", "10");
-        marker.setAttribute("refX", "9");
-        marker.setAttribute("refY", "5");
-        marker.setAttribute("orient", "auto");
-        const arrow = document.createElementNS(ns, "path");
-        arrow.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
-        arrow.setAttribute("fill", "context-stroke");
-        marker.appendChild(arrow);
-        defs.appendChild(marker);
-        elGraph.appendChild(defs);
-
-        edgesLayer = document.createElementNS(ns, "g");
-        edgesLayer.setAttribute("data-layer", "edges");
-        nodesLayer = document.createElementNS(ns, "g");
-        nodesLayer.setAttribute("data-layer", "nodes");
-        elGraph.appendChild(edgesLayer);
-        elGraph.appendChild(nodesLayer);
-      }
-
-      function animateEdgeDraw(pathEl) {
-        if (!pathEl) return;
-        const reduceMotion =
-          typeof window !== "undefined" &&
-          typeof window.matchMedia === "function" &&
-          window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-        if (reduceMotion) return;
-        try {
-          const len = pathEl.getTotalLength();
-          pathEl.style.strokeDasharray = String(len);
-          pathEl.style.strokeDashoffset = String(len);
-          if (typeof pathEl.animate === "function") {
-            pathEl.animate([{ strokeDashoffset: len }, { strokeDashoffset: 0 }], { duration: 420, easing: "ease-out", fill: "forwards" });
-          } else {
-            requestAnimationFrame(() => {
-              pathEl.style.strokeDashoffset = "0";
-            });
-          }
-        } catch {
-          // ignore
-        }
-      }
-
-      function scrollNodeIntoView(nodeId, behavior = "smooth") {
-        if (!elGraphWrap || !lastGraph || !nodeId) return;
-        const p = lastGraph.pos.get(nodeId);
-        if (!p) return;
-        const pad = 36;
-        const left = Math.max(0, p.x - pad);
-        const top = Math.max(0, p.y - pad);
-        try {
-          elGraphWrap.scrollTo({ left, top, behavior });
-        } catch {
-          elGraphWrap.scrollLeft = left;
-          elGraphWrap.scrollTop = top;
-        }
-      }
-
-      function renderGraph(graph) {
-        ensureSvg();
-        elGraph.setAttribute("width", String(graph.w));
-        elGraph.setAttribute("height", String(graph.h));
-        elGraph.setAttribute("viewBox", "0 0 " + graph.w + " " + graph.h);
-        elGraph.setAttribute("preserveAspectRatio", "xMinYMin meet");
-        if (!edgesLayer || !nodesLayer) return;
-
-        const seenEdges = new Set();
-        for (const e of graph.edges) {
-          const key = String(e.kind) + ":" + String(e.from) + "->" + String(e.to);
-          seenEdges.add(key);
-          let pathEl = edgeElByKey.get(key);
-          const isNew = !pathEl;
-          if (!pathEl) {
-            pathEl = document.createElementNS(ns, "path");
-            edgeElByKey.set(key, pathEl);
-            edgesLayer.appendChild(pathEl);
-            if (e.kind === "dep") pathEl.setAttribute("marker-end", "url(#arrow)");
-          }
-
-          const a = graph.pos.get(e.from);
-          const b = graph.pos.get(e.to);
-          if (!a || !b) {
-            pathEl.setAttribute("d", "");
-            continue;
-          }
-
-          const fromSlot = Number.isFinite(Number(e.fromSlot)) ? Number(e.fromSlot) : 0;
-          const fromSlots = Number.isFinite(Number(e.fromSlots)) ? Math.max(1, Number(e.fromSlots)) : 1;
-          const toSlot = Number.isFinite(Number(e.toSlot)) ? Number(e.toSlot) : 0;
-          const toSlots = Number.isFinite(Number(e.toSlots)) ? Math.max(1, Number(e.toSlots)) : 1;
-
-          const x1 = a.x + a.w;
-          const y1 = a.y + ((fromSlot + 1) / (fromSlots + 1)) * a.h;
-          const x2 = b.x;
-          const y2 = b.y + ((toSlot + 1) / (toSlots + 1)) * b.h;
-          const midX = (x1 + x2) / 2;
-          pathEl.setAttribute("d", "M " + x1 + " " + y1 + " C " + midX + " " + y1 + ", " + midX + " " + y2 + ", " + x2 + " " + y2);
-
-          const cls =
-            "edge " +
-            e.kind +
-            ((graph.selectedId && (e.from === graph.selectedId || e.to === graph.selectedId)) ? " active" : "") +
-            ((graph.nextId && e.to === graph.nextId) ? " next" : "");
-          pathEl.setAttribute("class", cls);
-
-          if (isNew && e.kind === "dep") animateEdgeDraw(pathEl);
-        }
-        for (const [key, el] of edgeElByKey.entries()) {
-          if (seenEdges.has(key)) continue;
-          try {
-            el.remove();
-          } catch {
-            // ignore
-          }
-          edgeElByKey.delete(key);
-        }
-
-        const seenNodes = new Set();
-        for (const n of graph.nodes) {
-          if (!n || !n.id) continue;
-          const p = graph.pos.get(n.id);
-          if (!p) continue;
-          const id = n.id;
-          seenNodes.add(id);
-          let view = nodeElById.get(id);
-          if (!view) {
-            const g = document.createElementNS(ns, "g");
-            g.dataset.nodeId = id;
-            g.addEventListener("click", () => selectNode(id));
-
-            const r = document.createElementNS(ns, "rect");
-            r.setAttribute("x", "0");
-            r.setAttribute("y", "0");
-            r.setAttribute("rx", "10");
-            r.setAttribute("ry", "10");
-            r.setAttribute("width", String(p.w));
-            r.setAttribute("height", String(p.h));
-
-            const dot = document.createElementNS(ns, "circle");
-            dot.setAttribute("cx", "12");
-            dot.setAttribute("cy", "16");
-            dot.setAttribute("r", "4");
-            dot.setAttribute("class", "nodeDot");
-
-            const t1 = document.createElementNS(ns, "text");
-            t1.setAttribute("x", "22");
-            t1.setAttribute("y", "18");
-            t1.setAttribute("class", "nodeId");
-            t1.setAttribute("font-weight", "600");
-
-            const t2 = document.createElementNS(ns, "text");
-            t2.setAttribute("x", "12");
-            t2.setAttribute("y", "38");
-            t2.setAttribute("class", "nodeSub");
-
-            g.appendChild(r);
-            g.appendChild(dot);
-            g.appendChild(t1);
-            g.appendChild(t2);
-            nodesLayer.appendChild(g);
-            view = { g, r, dot, t1, t2 };
-            nodeElById.set(id, view);
-          }
-
-          const st = statusDotClass(n);
-          view.g.setAttribute(
-            "class",
-            "node st-" + st + (graph.selectedId === id ? " selected" : "") + (graph.nextId === id ? " next" : ""),
-          );
-          view.g.setAttribute("transform", "translate(" + p.x + " " + p.y + ")");
-
-          const lines = nodeLines(n);
-          view.t1.textContent = lines.top;
-          view.t2.textContent = lines.bottom;
-        }
-        for (const [id, view] of nodeElById.entries()) {
-          if (seenNodes.has(id)) continue;
-          try {
-            view.g.remove();
-          } catch {
-            // ignore
-          }
-          nodeElById.delete(id);
-        }
-      }
-
-      let lastSnapshot = null;
-      let selectedNodeId = "";
-      let logPollTimer = null;
-
-      async function updateSelection() {
-        const snap = lastSnapshot;
-        if (!snap) return;
-        const nodes = Array.isArray(snap.nodes) ? snap.nodes : [];
-        const node = selectedNodeId ? nodes.find((n) => n && n.id === selectedNodeId) : null;
-        if (!node) {
-          elSelId.textContent = "—";
-          elSelType.textContent = "—";
-          elSelStatus.textContent = "—";
-          elSelDot.className = "dot";
-          elSelAttempts.textContent = "—";
-          elSelRunner.textContent = "—";
-          elSelDeps.textContent = "—";
-          elSelParent.textContent = "—";
-          elSelLogPath.textContent = "—";
-          elLog.textContent = "(select a node)";
-          btnCancel.disabled = true;
-          return;
-        }
-        elSelId.textContent = node.id || "";
-        elSelType.textContent = node.type || "";
-        elSelStatus.textContent = node.status || "open";
-        elSelDot.className = "dot " + statusDotClass(node);
-        elSelAttempts.textContent = String(node.attempts ?? 0);
-        elSelRunner.textContent = node.runner || "";
-        elSelDeps.textContent = (Array.isArray(node.dependsOn) && node.dependsOn.length) ? node.dependsOn.join(", ") : "(none)";
-        elSelParent.textContent = node.parentId || "(none)";
-        btnCancel.disabled = !(node.lock && node.lock.runId);
-
-        try {
-          const logData = await fetchLog(node.id);
-          elSelLogPath.textContent = logData.path || "(none)";
-          elLog.textContent = logData.text || "(empty)";
-          elLog.scrollTop = elLog.scrollHeight;
-        } catch (e) {
-          elSelLogPath.textContent = "(error)";
-          elLog.textContent = String((e && e.message) ? e.message : e);
-        }
-      }
-
-      function selectNode(id) {
-        selectedNodeId = id || "";
-        if (lastSnapshot) render(lastSnapshot);
-        if (selectedNodeId) {
-          lastAutoScrollId = selectedNodeId;
-          scrollNodeIntoView(selectedNodeId, "smooth");
-        }
-      }
-
-      function render(snapshot) {
-        lastSnapshot = snapshot;
-        elNow.textContent = snapshot.nowIso || "";
-        elNext.textContent = fmtNext(snapshot.next);
-        elSupervisor.textContent = fmtSupervisor(snapshot.supervisor);
-        const counts = snapshot.counts || {};
-        elCounts.textContent = Object.keys(counts).sort().map((k) => k + "=" + counts[k]).join("  ");
-
-        const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
-        if (!selectedNodeId) {
-          selectedNodeId = (snapshot.next && snapshot.next.id) ? snapshot.next.id : ((nodes[0] && nodes[0].id) ? nodes[0].id : "");
-        }
-        const graph = buildGraph(snapshot, selectedNodeId);
-        lastGraph = graph;
-        renderGraph(graph);
-        updateSelection();
-
-        if (selectedNodeId && selectedNodeId !== lastAutoScrollId) {
-          lastAutoScrollId = selectedNodeId;
-          scrollNodeIntoView(selectedNodeId, "auto");
-        }
-      }
-
-      btnPause.onclick = async () => {
-        try {
-          const res = await postJson("/api/control/pause", {});
-          toast(res.message || "Enqueued pause.");
-        } catch (e) {
-          toast("pause failed: " + String((e && e.message) ? e.message : e));
-        }
-      };
-      btnResume.onclick = async () => {
-        try {
-          const res = await postJson("/api/control/resume", {});
-          toast(res.message || "Enqueued resume.");
-        } catch (e) {
-          toast("resume failed: " + String((e && e.message) ? e.message : e));
-        }
-      };
-      btnReplan.onclick = async () => {
-        try {
-          const res = await postJson("/api/control/replan", {});
-          toast(res.message || "Enqueued replan.");
-        } catch (e) {
-          toast("replan failed: " + String((e && e.message) ? e.message : e));
-        }
-      };
-      btnSetWorkers.onclick = async () => {
-        const n = Number(inpWorkers.value);
-        if (!Number.isFinite(n) || n <= 0) return toast("workers must be a positive number");
-        try {
-          const res = await postJson("/api/control/set-workers", { workers: Math.floor(n) });
-          toast(res.message || "Enqueued set-workers.");
-        } catch (e) {
-          toast("set-workers failed: " + String((e && e.message) ? e.message : e));
-        }
-      };
-      btnCancel.onclick = async () => {
-        const id = selectedNodeId;
-        if (!id) return;
-        if (!confirm("Cancel running node " + id + "?")) return;
-        try {
-          const res = await postJson("/api/control/cancel", { nodeId: id });
-          toast(res.message || ("Enqueued cancel " + id + "."));
-        } catch (e) {
-          toast("cancel failed: " + String((e && e.message) ? e.message : e));
-        }
-      };
-
-      function startLogPolling() {
-        if (logPollTimer) clearInterval(logPollTimer);
-        logPollTimer = setInterval(() => {
-          const snap = lastSnapshot;
-          const nodes = snap && Array.isArray(snap.nodes) ? snap.nodes : [];
-          const node = selectedNodeId ? nodes.find((n) => n && n.id === selectedNodeId) : null;
-          if (node && node.lock && node.lock.runId) updateSelection();
-        }, 1200);
-      }
-      startLogPolling();
-
-      const es = new EventSource("/events");
-      es.onmessage = (ev) => {
-        try { render(JSON.parse(ev.data)); } catch {}
-      };
-      es.onerror = () => {
-        // browser will reconnect
-      };
-    </script>
-  </body>
-</html>`;
+/* ── Static file serving ──────────────────────────────────────────────── */
+
+const __uiDir = path.dirname(fileURLToPath(import.meta.url));
+const staticDir = path.join(__uiDir, "static");
+
+const MIME_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+};
+
+const staticCache = new Map();
+
+async function readStaticFile(filename) {
+  if (staticCache.has(filename)) return staticCache.get(filename);
+  const filePath = path.join(staticDir, filename);
+  const content = await readFile(filePath, "utf8");
+  staticCache.set(filename, content);
+  return content;
 }
+
+/* ── Dashboard server ─────────────────────────────────────────────────── */
 
 export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 }) {
   const token = randomBytes(18).toString("hex");
@@ -1031,9 +205,28 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
       const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
       if (req.method === "GET" && url.pathname === "/") {
-        const html = homeHtml({ token });
+        const template = await readStaticFile("index.html");
+        const html = template.replace("__DAGAIN_TOKEN__", token);
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         res.end(html);
+        return;
+      }
+
+      if (req.method === "GET" && url.pathname.startsWith("/static/")) {
+        const relPath = url.pathname.slice("/static/".length);
+        if (!relPath || relPath.includes("..") || relPath.includes("\\") || path.isAbsolute(relPath)) {
+          return notFound(res);
+        }
+        const ext = path.extname(relPath);
+        const mime = MIME_TYPES[ext];
+        if (!mime) return notFound(res);
+        try {
+          const content = await readStaticFile(relPath);
+          res.writeHead(200, { "content-type": mime });
+          res.end(content);
+        } catch {
+          notFound(res);
+        }
         return;
       }
 
@@ -1065,6 +258,335 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
         const stdoutAbs = stdoutRel ? safeResolveUnderRoot(paths.rootDir, stdoutRel) : null;
         const text = stdoutAbs ? await readTailText(stdoutAbs, tail) : "";
         json(res, 200, { nodeId, path: stdoutRel || "", text });
+        return;
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/runs") {
+        const limitRaw = Number(url.searchParams.get("limit") || 60);
+        const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(200, Math.floor(limitRaw)) : 60;
+        const entries = await readdir(paths.runsDir, { withFileTypes: true }).catch(() => []);
+        const dirNames = entries
+          .filter((e) => e && typeof e.isDirectory === "function" && e.isDirectory())
+          .map((e) => String(e.name || ""))
+          .filter(Boolean)
+          .sort()
+          .reverse()
+          .slice(0, limit);
+
+        const runs = [];
+        for (const runId of dirNames) {
+          const resultAbs = path.join(paths.runsDir, runId, "result.json");
+          const stdoutAbs = path.join(paths.runsDir, runId, "stdout.log");
+          const resultRel = path.relative(paths.rootDir, resultAbs);
+          const stdoutRel = path.relative(paths.rootDir, stdoutAbs);
+          let nodeId = "";
+          let status = "";
+          let summary = "";
+          try {
+            const parsed = safeJsonParse(await readFile(resultAbs, "utf8"), null);
+            nodeId = typeof parsed?.nodeId === "string" ? parsed.nodeId : "";
+            status = typeof parsed?.status === "string" ? parsed.status : "";
+            summary = typeof parsed?.summary === "string" ? parsed.summary : "";
+          } catch {
+            // ignore
+          }
+          runs.push({ runId, nodeId, status, summary, resultPath: resultRel, stdoutPath: stdoutRel });
+        }
+
+        json(res, 200, { ok: true, runs });
+        return;
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/config") {
+        const config = await loadConfig(paths.configPath);
+        json(res, 200, { ok: true, config: config || defaultConfig() });
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/config") {
+        await requireToken(req);
+        const body = await readJsonBody(req, { maxBytes: 64_000 });
+        const config = body?.config;
+        if (!config || typeof config !== "object") return json(res, 400, { error: "Missing config object." });
+        await saveConfig(paths.configPath, config);
+        json(res, 200, { ok: true, message: "Config saved." });
+        return;
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/run/log") {
+        const runIdRaw = String(url.searchParams.get("runId") || "").trim();
+        const runId = runIdRaw && !runIdRaw.includes("/") && !runIdRaw.includes("\\") && !runIdRaw.includes("..") ? runIdRaw : "";
+        if (!runId) return json(res, 400, { error: "Missing or invalid ?runId=<runId>." });
+        const tail = Number(url.searchParams.get("tail") || 10_000);
+
+        const stdoutRel = path.relative(paths.rootDir, path.join(paths.runsDir, runId, "stdout.log"));
+        const stdoutAbs = safeResolveUnderRoot(paths.rootDir, stdoutRel);
+        const text = stdoutAbs ? await readTailText(stdoutAbs, tail) : "";
+        json(res, 200, { runId, path: stdoutRel, text });
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/run/delete") {
+        await requireToken(req);
+        const body = await readJsonBody(req, { maxBytes: 2_000 });
+        const runIdRaw = typeof body?.runId === "string" ? body.runId.trim() : "";
+        const runId = runIdRaw && !runIdRaw.includes("/") && !runIdRaw.includes("\\") && !runIdRaw.includes("..") ? runIdRaw : "";
+        if (!runId) return json(res, 400, { error: "Missing or invalid runId." });
+        const runDir = path.join(paths.runsDir, runId);
+        const safe = safeResolveUnderRoot(paths.rootDir, path.relative(paths.rootDir, runDir));
+        if (!safe) return json(res, 400, { error: "Invalid runId." });
+        await rm(safe, { recursive: true, force: true });
+        json(res, 200, { ok: true, runId });
+        return;
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/chat/history") {
+        const chatNodeId = "__run__";
+        const [chatRollupRow, chatSummaryRow, chatLastOpsRow, chatTurnsRow] = await Promise.all([
+          kvGet({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.rollup" }).catch(() => null),
+          kvGet({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.summary" }).catch(() => null),
+          kvGet({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.last_ops" }).catch(() => null),
+          kvGet({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.turns" }).catch(() => null),
+        ]);
+
+        const rollup = typeof chatRollupRow?.value_text === "string" ? chatRollupRow.value_text.trim() : "";
+        const summary = typeof chatSummaryRow?.value_text === "string" ? chatSummaryRow.value_text.trim() : "";
+        const lastOps = typeof chatLastOpsRow?.value_text === "string" ? chatLastOpsRow.value_text.trim() : "";
+        const turnsText = typeof chatTurnsRow?.value_text === "string" ? chatTurnsRow.value_text.trim() : "";
+        const turnsParsed = safeJsonParse(turnsText, []);
+        const turns = Array.isArray(turnsParsed) ? turnsParsed : [];
+        json(res, 200, { ok: true, rollup, summary, lastOps, turns });
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/chat/clear") {
+        await requireToken(req);
+        const chatNodeId = "__run__";
+        const now = new Date().toISOString();
+        await Promise.all([
+          kvPut({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.rollup", valueText: "", nowIso: now }),
+          kvPut({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.summary", valueText: "", nowIso: now }),
+          kvPut({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.last_ops", valueText: "", nowIso: now }),
+          kvPut({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.turns", valueText: "[]", nowIso: now }),
+        ]);
+        json(res, 200, { ok: true, message: "Chat history cleared." });
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/control/start") {
+        await requireToken(req);
+        const lockPath = path.join(paths.rootDir, ".dagain", ".supervisor.lock");
+        let alreadyRunning = false;
+        try {
+          const lockText = await readFile(lockPath, "utf8");
+          const lock = JSON.parse(lockText);
+          if (lock?.pid && String(lock.host || "").trim() === os.hostname()) {
+            try { process.kill(lock.pid, 0); alreadyRunning = true; } catch {
+              // PID not running — remove stale lock
+              await unlink(lockPath).catch(() => {});
+            }
+          }
+        } catch { /* no lock file */ }
+        if (alreadyRunning) {
+          json(res, 200, { ok: true, alreadyRunning: true, message: "Supervisor already running." });
+          return;
+        }
+        // Spawn with piped output so we can detect early failures
+        const child = spawn(process.execPath, [dagainBinPath(), "run", "--no-live", "--no-color", "--no-prompt"], {
+          cwd: paths.rootDir,
+          env: { ...process.env, NO_COLOR: "1" },
+          stdio: ["ignore", "pipe", "pipe"],
+          detached: true,
+        });
+        let stdout = "";
+        let stderr = "";
+        child.stdout.setEncoding("utf8");
+        child.stderr.setEncoding("utf8");
+        child.stdout.on("data", (d) => { stdout += d; });
+        child.stderr.on("data", (d) => { stderr += d; });
+        // Wait briefly to see if the process starts or dies immediately
+        const earlyExit = await new Promise((resolve) => {
+          const timer = setTimeout(() => {
+            child.stdout.destroy();
+            child.stderr.destroy();
+            child.unref?.();
+            resolve(null);
+          }, 2000);
+          child.on("close", (code) => {
+            clearTimeout(timer);
+            resolve(code);
+          });
+        });
+        if (earlyExit !== null && earlyExit !== 0) {
+          const errMsg = (stderr || stdout || "").trim().split("\n").pop() || `Process exited with code ${earlyExit}`;
+          json(res, 500, { ok: false, error: errMsg });
+          return;
+        }
+        const pid = child.pid || 0;
+        json(res, 200, { ok: true, pid, message: `Started supervisor pid=${pid}.` });
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/chat/send") {
+        await requireToken(req);
+        const body = await readJsonBody(req, { maxBytes: 64_000 });
+        const message = typeof body?.message === "string" ? body.message.trim() : "";
+        if (!message) return json(res, 400, { error: "Missing message." });
+
+        const runnerOverride = typeof body?.runner === "string" ? body.runner.trim() : "";
+        const roleOverride = typeof body?.role === "string" ? body.role.trim() : "";
+        const role = roleOverride || "planner";
+
+        const snapshot = await getSnapshot();
+        const counts = snapshot?.counts || {};
+        const next = snapshot?.next || null;
+        const nodeLines = (Array.isArray(snapshot?.nodes) ? snapshot.nodes : [])
+          .map((n) => formatNodeLine(n))
+          .slice(0, 40)
+          .join("\n");
+
+        const recent = await readTailText(path.join(paths.memoryDir, "activity.log"), 4_000);
+
+        const chatNodeId = "__run__";
+        const [chatRollupRow, chatSummaryRow, chatLastOpsRow, chatTurnsRow] = await Promise.all([
+          kvGet({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.rollup" }).catch(() => null),
+          kvGet({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.summary" }).catch(() => null),
+          kvGet({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.last_ops" }).catch(() => null),
+          kvGet({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.turns" }).catch(() => null),
+        ]);
+
+        const chatRollup = typeof chatRollupRow?.value_text === "string" ? chatRollupRow.value_text.trim() : "";
+        const chatSummary = typeof chatSummaryRow?.value_text === "string" ? chatSummaryRow.value_text.trim() : "";
+        const chatLastOpsText = typeof chatLastOpsRow?.value_text === "string" ? chatLastOpsRow.value_text.trim() : "";
+        const chatTurnsParsed = safeJsonParse(typeof chatTurnsRow?.value_text === "string" ? chatTurnsRow.value_text : "", []);
+        const chatTurns = Array.isArray(chatTurnsParsed) ? chatTurnsParsed : [];
+
+        let memorySection = "";
+        if (chatRollup || chatSummary || chatLastOpsText || chatTurns.length > 0) {
+          const lines = [];
+          lines.push("Chat memory (kv __run__):");
+          if (chatRollup) lines.push(`- rolling_summary: ${truncateText(chatRollup, 800)}`);
+          if (chatSummary) lines.push(`- summary: ${truncateText(chatSummary, 400)}`);
+          if (chatLastOpsText) lines.push(`- last_ops: ${truncateText(chatLastOpsText, 800)}`);
+          if (chatTurns.length > 0) {
+            lines.push("- recent turns:");
+            const recentTurns = chatTurns.slice(Math.max(0, chatTurns.length - 6));
+            for (const t of recentTurns) {
+              const u = truncateText(t?.user || "", 200);
+              const a = truncateText(t?.reply || "", 200);
+              if (u) lines.push(`  - user: ${u}`);
+              if (a) lines.push(`    assistant: ${a}`);
+            }
+          }
+          memorySection = lines.join("\n");
+        }
+
+        const prompt =
+          `You are Dagain Chat Router.\n` +
+          `Return JSON in <result> with {status, summary, data:{reply, ops, rollup}}.\n` +
+          `Allowed ops:\n` +
+          `- {"type":"status"}\n` +
+          `- {"type":"control.pause"}\n` +
+          `- {"type":"control.resume"}\n` +
+          `- {"type":"control.setWorkers","workers":3}\n` +
+          `- {"type":"control.replan"}\n` +
+          `- {"type":"control.cancel","nodeId":"task-001"}\n` +
+          `Rules:\n` +
+          `- Do not tell the user to run CLI commands; emit ops and Dagain will execute them.\n` +
+          `- Always include data.rollup as an updated rolling summary (<= 800 chars). If Chat memory includes rolling_summary, update it.\n` +
+          `- If unclear, ask one clarifying question in reply and ops=[].\n` +
+          (memorySection ? `\n${memorySection}\n` : "\n") +
+          `\n` +
+          `State counts: ${JSON.stringify(counts)}\n` +
+          `Next runnable: ${next ? formatNodeLine(next) : "(none)"}\n` +
+          `Nodes (first 40):\n${nodeLines}\n` +
+          (recent ? `\nRecent activity (tail):\n${recent}\n` : "") +
+          `\nUser: ${message}\n`;
+
+        const args = ["microcall", "--prompt", prompt, "--role", role];
+        if (runnerOverride) args.push("--runner", runnerOverride);
+        const micro = await runCliCapture({ cwd: paths.rootDir, args });
+        if (micro.code !== 0) throw new Error(String(micro.stderr || micro.stdout || `microcall failed (exit ${micro.code})`));
+        const parsed = safeJsonParse(String(micro.stdout || ""), null);
+        if (!parsed) throw new Error("Chat router returned invalid JSON.");
+
+        const data = parsed?.data && typeof parsed.data === "object" ? parsed.data : null;
+        const reply = typeof data?.reply === "string" ? data.reply.trim() : "";
+        const rollupNext = typeof data?.rollup === "string" ? data.rollup.trim() : "";
+        const ops = Array.isArray(data?.ops) ? data.ops : [];
+
+        const applied = [];
+        for (const op of ops) {
+          const type = typeof op?.type === "string" ? op.type.trim() : "";
+          if (!type || type === "status") continue;
+
+          if (type === "control.pause") {
+            const id = await enqueueControl({ command: "pause", args: {} });
+            applied.push({ type, id });
+            continue;
+          }
+          if (type === "control.resume") {
+            const id = await enqueueControl({ command: "resume", args: {} });
+            applied.push({ type, id });
+            continue;
+          }
+          if (type === "control.replan") {
+            const id = await enqueueControl({ command: "replan_now", args: {} });
+            applied.push({ type, id });
+            continue;
+          }
+          if (type === "control.setWorkers") {
+            const n = Number(op?.workers);
+            const workers = Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+            if (workers == null) continue;
+            const id = await enqueueControl({ command: "set_workers", args: { workers } });
+            applied.push({ type, id });
+            continue;
+          }
+          if (type === "control.cancel") {
+            const nodeId = typeof op?.nodeId === "string" ? op.nodeId.trim() : "";
+            if (!nodeId) continue;
+            const id = await enqueueControl({ command: "cancel", args: { nodeId } });
+            applied.push({ type, id });
+            continue;
+          }
+        }
+
+        const now = new Date().toISOString();
+        const storedOpsText = JSON.stringify(ops);
+        const turn = {
+          at: now,
+          user: truncateText(message, 800),
+          reply: truncateText(reply, 1200),
+          ops: ops.map((o) => (typeof o?.type === "string" ? o.type : null)).filter(Boolean),
+        };
+        const turnsNext = chatTurns.concat([turn]).slice(-10);
+
+        if (rollupNext) {
+          await kvPut({
+            dbPath: paths.dbPath,
+            nodeId: "__run__",
+            key: "chat.rollup",
+            valueText: truncateText(rollupNext, 4000),
+            nowIso: now,
+          });
+        }
+        await kvPut({ dbPath: paths.dbPath, nodeId: "__run__", key: "chat.summary", valueText: truncateText(reply, 400), nowIso: now });
+        await kvPut({
+          dbPath: paths.dbPath,
+          nodeId: "__run__",
+          key: "chat.last_ops",
+          valueText: truncateText(storedOpsText, 4000),
+          nowIso: now,
+        });
+        await kvPut({ dbPath: paths.dbPath, nodeId: "__run__", key: "chat.turns", valueText: JSON.stringify(turnsNext), nowIso: now });
+
+        json(res, 200, {
+          ok: true,
+          reply,
+          applied,
+          chat: { turns: turnsNext, rollup: rollupNext || chatRollup, summary: truncateText(reply, 400) },
+        });
         return;
       }
 

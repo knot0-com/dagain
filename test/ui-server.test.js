@@ -8,7 +8,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 function runCli({ binPath, cwd, args }) {
@@ -70,6 +70,18 @@ function httpGetJson(url) {
   });
 }
 
+function httpGetText(url) {
+  return new Promise((resolve, reject) => {
+    const req = http.get(url, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (d) => (body += d));
+      res.on("end", () => resolve(body));
+    });
+    req.on("error", reject);
+  });
+}
+
 test("ui: serves dashboard state json", async () => {
   const repoRoot = fileURLToPath(new URL("..", import.meta.url));
   const binPath = path.join(repoRoot, "bin", "dagain.js");
@@ -82,6 +94,12 @@ test("ui: serves dashboard state json", async () => {
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
 
+  const runId = "2026-01-01T00-00-00-000Z-aaaaaa";
+  const runDir = path.join(tmpDir, ".dagain", "runs", runId);
+  await mkdir(runDir, { recursive: true });
+  await writeFile(path.join(runDir, "stdout.log"), "hello from run\n", "utf8");
+  await writeFile(path.join(runDir, "result.json"), JSON.stringify({ status: "success", nodeId: "task-123" }, null, 2) + "\n", "utf8");
+
   const child = spawn(process.execPath, [binPath, "ui", "--host", "127.0.0.1", "--port", "0"], {
     cwd: tmpDir,
     env: { ...process.env, NO_COLOR: "1" },
@@ -93,10 +111,79 @@ test("ui: serves dashboard state json", async () => {
   try {
     const m = await waitForMatch(child.stdout, /dagain ui listening on (http:\/\/127\.0\.0\.1:\d+)/);
     const baseUrl = m[1];
+
+    const home = await httpGetText(`${baseUrl}/`);
+    assert.match(home, /<link\s+rel="stylesheet"\s+href="\/static\/styles\.css"/);
+    assert.match(home, /id="toggleRuns"/);
+    assert.match(home, /id="toggleChat"/);
+    assert.match(home, /id="toggleSelection"/);
+    assert.match(home, /id="toggleConfig"/);
+
+    const css = await httpGetText(`${baseUrl}/static/styles.css`);
+    assert.match(css, /\.appBody\s*\{[^}]*display:\s*flex/);
+    assert.match(css, /\.activityBar\s*\{/);
+
     const state = await httpGetJson(`${baseUrl}/api/state`);
     assert.ok(state && typeof state === "object");
     assert.ok(Array.isArray(state.nodes));
     assert.ok(state.nodes.some((n) => n.id === "plan-000"));
+
+    const runs = await httpGetJson(`${baseUrl}/api/runs?limit=5`);
+    assert.ok(runs && typeof runs === "object");
+    assert.ok(Array.isArray(runs.runs));
+    assert.ok(runs.runs.some((r) => r.runId === runId));
+
+    const log = await httpGetJson(`${baseUrl}/api/run/log?runId=${encodeURIComponent(runId)}&tail=1000`);
+    assert.equal(log.runId, runId);
+    assert.match(String(log.text || ""), /hello from run/);
+
+    // Extract auth token from the page HTML
+    const tokenMatch = home.match(/__DAGAIN_TOKEN__/) ? null : home.match(/token:\s*"([^"]+)"/);
+    const uiToken = tokenMatch ? tokenMatch[1] : "";
+
+    function httpPost(url, body, extraHeaders = {}) {
+      return new Promise((resolve, reject) => {
+        const reqUrl = new URL(url);
+        const data = JSON.stringify(body);
+        const postReq = http.request(reqUrl, { method: "POST", headers: { "content-type": "application/json", "x-dagain-token": uiToken, ...extraHeaders } }, (postRes) => {
+          let buf = "";
+          postRes.setEncoding("utf8");
+          postRes.on("data", (d) => (buf += d));
+          postRes.on("end", () => { try { resolve(JSON.parse(buf)); } catch (e) { reject(e); } });
+        });
+        postReq.on("error", reject);
+        postReq.end(data);
+      });
+    }
+
+    // CLEAR chat via POST /api/chat/clear
+    const clearResult = await httpPost(`${baseUrl}/api/chat/clear`, {});
+    assert.ok(clearResult && clearResult.ok, "chat clear should return ok");
+
+    // GET /api/config
+    const configResult = await httpGetJson(`${baseUrl}/api/config`);
+    assert.ok(configResult && configResult.ok);
+    assert.ok(configResult.config && typeof configResult.config === "object");
+    assert.ok(configResult.config.runners && typeof configResult.config.runners === "object");
+
+    // POST /api/config (save)
+    const savedConfig = { ...configResult.config };
+    savedConfig.supervisor = { ...savedConfig.supervisor, workers: 2 };
+    const saveResult = await httpPost(`${baseUrl}/api/config`, { config: savedConfig });
+    assert.ok(saveResult && saveResult.ok);
+
+    // Verify save persisted
+    const configAfter = await httpGetJson(`${baseUrl}/api/config`);
+    assert.equal(configAfter.config.supervisor.workers, 2);
+
+    // DELETE run via POST /api/run/delete
+    const delResult = await httpPost(`${baseUrl}/api/run/delete`, { runId });
+    assert.ok(delResult && delResult.ok, "delete should return ok");
+    assert.equal(delResult.runId, runId);
+
+    // Verify run is gone from listing
+    const runsAfter = await httpGetJson(`${baseUrl}/api/runs?limit=5`);
+    assert.ok(!runsAfter.runs.some((r) => r.runId === runId), "deleted run should not appear in listing");
   } finally {
     child.kill("SIGTERM");
     await new Promise((resolve) => child.on("close", () => resolve()));

@@ -1,0 +1,223 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>dagain</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <script>window.__DAGAIN = { token: "__DAGAIN_TOKEN__" };</script>
+    <header>
+      <div class="top">
+        <div class="brand">
+          <h1>dagain</h1>
+          <span class="connDot connected" id="connDot" title="SSE connected"></span>
+          <div class="pills">
+            <span class="pill">now: <code id="nowIso">…</code></span>
+            <span class="pill">next: <code id="next">…</code></span>
+            <span class="pill">supervisor: <code id="supervisor">…</code></span>
+          </div>
+        </div>
+        <div class="controls">
+          <div class="controlGroup">
+            <button class="btn" id="pause">Pause</button>
+            <button class="btn" id="resume">Resume</button>
+            <button class="btn primary" id="replan">Replan</button>
+          </div>
+          <span class="controlSep"></span>
+          <div class="controlGroup">
+            <input class="input" id="workers" placeholder="workers" inputmode="numeric" />
+            <button class="btn" id="setWorkers">Set</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div class="appBody">
+      <nav class="activityBar" id="activityBar">
+        <button class="abBtn panel-active" id="toggleRuns" title="Runs (R)">
+          <svg class="abSvg" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 5h14M3 10h14M3 15h14"/></svg>
+          <span class="abLabel">Runs</span>
+        </button>
+        <button class="abBtn panel-active" id="toggleChat" title="Chat (C)">
+          <svg class="abSvg" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h12a1 1 0 011 1v8a1 1 0 01-1 1H8l-4 3v-3a1 1 0 01-1-1V5a1 1 0 011-1z"/></svg>
+          <span class="abLabel">Chat</span>
+        </button>
+        <button class="abBtn panel-active" id="toggleSelection" title="Details (D)">
+          <svg class="abSvg" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="7"/><path d="M10 7v3l2 2"/></svg>
+          <span class="abLabel">Details</span>
+        </button>
+        <div class="abSpacer"></div>
+        <button class="abBtn" id="toggleConfig" title="Config (,)">
+          <svg class="abSvg" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="10" cy="10" r="3"/>
+            <path d="M10 1.5v2M10 16.5v2M18.5 10h-2M3.5 10h-2M15.95 4.05l-1.41 1.41M5.46 14.54l-1.41 1.41M15.95 15.95l-1.41-1.41M5.46 5.46L4.05 4.05"/>
+          </svg>
+          <span class="abLabel">Config</span>
+        </button>
+      </nav>
+
+      <aside class="runsPanel card" id="runsPanel">
+        <div class="cardHeader">
+          <h2>Runs</h2>
+          <div style="display:flex; gap:6px;">
+            <button class="btn primary" id="startRun" title="Start a new supervisor run">Start</button>
+            <button class="btn danger" id="deleteRun" disabled title="Delete selected run">Delete</button>
+          </div>
+        </div>
+        <div class="cardBody runsPanelBody">
+          <div class="runsList mono" id="runsList">(loading)</div>
+          <div class="runMeta mono" id="runMeta">select a run to view its log</div>
+          <div class="log mono" id="runLog">(empty)</div>
+        </div>
+      </aside>
+
+      <section class="chatSidebar card" id="chatCard">
+        <div class="cardHeader chatCardHeader">
+          <div class="chatHeaderLeft">
+            <h2>Chat</h2>
+            <span class="chatOnlineDot"></span>
+          </div>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <div class="muted mono chatRollup" id="chatStatus"></div>
+            <button class="btn" id="clearChat" title="Clear chat history">Clear</button>
+          </div>
+        </div>
+        <div class="chatBody">
+          <div class="chatLogWrap">
+            <div class="chatLog mono" id="chatLog">(loading)</div>
+            <div class="chatScrollFade chatScrollFadeTop"></div>
+            <div class="chatScrollFade chatScrollFadeBottom"></div>
+            <div class="newMsgPill" id="newMsgPill">New messages &#8595;</div>
+          </div>
+          <div class="chatComposer">
+            <input class="chatComposerInput" id="chatInput" placeholder="Ask about this run..." />
+            <button class="chatComposerSend" id="chatSend" title="Send (Enter)">
+              <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M3.5 2.8a.75.75 0 01.87-.25l13 5.5a.75.75 0 010 1.38l-13 5.5a.75.75 0 01-1.02-.93L5.6 10 3.35 5.93a.75.75 0 01.15-.93z"/></svg>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <div class="centerColumn">
+        <section class="card" id="dagCard">
+          <div class="cardHeader">
+            <div style="display:flex; gap:10px; align-items:center;">
+              <h2>DAG</h2>
+              <input class="nodeSearchInput" id="nodeSearch" placeholder="Search nodes  (/)" />
+            </div>
+            <div style="display:flex; gap:8px; flex-wrap: wrap; align-items:center; justify-content: flex-end;">
+              <div class="muted mono" id="counts"></div>
+              <button class="btn" id="hideDone" title="Toggle hide done nodes">Hide done</button>
+              <button class="btn" id="fit">Fit</button>
+              <button class="btn" id="zoomOut" title="Zoom out">&minus;</button>
+              <input type="range" class="zoomSlider" id="zoomSlider" min="25" max="400" value="100" />
+              <button class="btn" id="zoomIn" title="Zoom in">+</button>
+              <span class="pill zoomPill" id="zoomPill"><code id="zoomPct">100%</code></span>
+            </div>
+          </div>
+          <div class="filterChips" id="filterChips">
+            <button class="filterChip st-open" data-status="open">open</button>
+            <button class="filterChip st-in_progress" data-status="in_progress">in_progress</button>
+            <button class="filterChip st-done" data-status="done">done</button>
+            <button class="filterChip st-failed" data-status="failed">failed</button>
+            <button class="filterChip st-needs_human" data-status="needs_human">needs_human</button>
+          </div>
+          <div class="cardBody">
+            <div id="graphWrap">
+              <svg id="graph" role="img" aria-label="dag graph"></svg>
+              <canvas id="minimap" width="160" height="100"></canvas>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <aside class="card" id="selectionCard">
+        <div class="cardHeader">
+          <h2>Selection</h2>
+          <div style="display:flex; gap:6px;">
+            <button class="btn" id="retry" disabled>Retry</button>
+            <button class="btn danger" id="cancel" disabled>Cancel</button>
+          </div>
+        </div>
+        <div class="cardBody">
+          <div class="statusStrip" id="statusStrip"></div>
+          <div class="collapseHeader" id="infoToggle"><span class="collapseArrow">&#9660;</span> Info</div>
+          <div class="collapseBody" id="infoBody">
+            <div class="mono">
+              <div><span class="muted">id:</span> <span id="selId">—</span></div>
+              <div><span class="muted">type:</span> <span id="selType">—</span></div>
+              <div><span class="muted">status:</span> <span class="status"><span class="dot" id="selDot"></span><span id="selStatus">—</span></span></div>
+              <div><span class="muted">attempts:</span> <span id="selAttempts">—</span></div>
+              <div><span class="muted">runner:</span> <span id="selRunner">—</span></div>
+              <div><span class="muted">deps:</span> <span id="selDeps">—</span></div>
+              <div><span class="muted">parent:</span> <span id="selParent">—</span></div>
+              <div><span class="muted">log:</span> <span id="selLogPath">—</span></div>
+              <div class="timingInfo" id="timingInfo"></div>
+            </div>
+          </div>
+          <div style="height:8px"></div>
+          <div class="collapseHeader" id="logToggle"><span class="collapseArrow">&#9660;</span> Log</div>
+          <div class="collapseBody" id="logBody">
+            <div class="logSearchWrap">
+              <input type="text" id="logSearch" placeholder="Search log..." />
+              <button class="btn" id="logSearchClear">X</button>
+            </div>
+            <div class="log mono" id="log">(select a node)</div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="mobileTabs" id="mobileTabs">
+      <button class="btn panel-active" id="mobileGraph">Graph</button>
+      <button class="btn" id="mobileChat">Chat</button>
+      <button class="btn" id="mobileDetails">Details</button>
+    </div>
+
+    <div class="nodeTooltip" id="nodeTooltip"></div>
+    <div class="toastContainer" id="toastContainer"></div>
+    <div class="confirmBackdrop" id="confirmBackdrop">
+      <div class="confirmBox">
+        <p id="confirmMessage"></p>
+        <div class="confirmActions">
+          <button class="btn" id="confirmCancel">Cancel</button>
+          <button class="btn danger" id="confirmOk">Confirm</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="configBackdrop" id="configBackdrop">
+      <div class="configModal card">
+        <div class="cardHeader">
+          <h2>Configuration</h2>
+          <div style="display:flex; gap:6px;">
+            <button class="btn primary" id="configSave">Save</button>
+            <button class="btn" id="configClose">Close</button>
+          </div>
+        </div>
+        <div class="configBody" id="configBody">
+          <div class="configSection">
+            <h3>Roles</h3>
+            <div class="configGrid" id="configRoles"></div>
+          </div>
+          <div class="configSection">
+            <h3>Supervisor</h3>
+            <div class="configGrid" id="configSupervisor"></div>
+          </div>
+          <div class="configSection">
+            <h3>Runners</h3>
+            <div id="configRunners"></div>
+          </div>
+          <div class="configSection">
+            <h3>Defaults</h3>
+            <div class="configGrid" id="configDefaults"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/static/client.js"></script>
+  </body>
+</html>
