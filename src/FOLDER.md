@@ -16,7 +16,7 @@ It is the main runtime code shipped in the npm package.
 
 | Name | Role/Status | Responsibility |
 | --- | --- | --- |
-| `cli.js` | runtime | CLI command routing + implementations (supervisor scheduling + recovery) |
+| `cli.js` | runtime | CLI command routing + implementations (supervisor scheduling + recovery + control auto-start) |
 | `lib/` | runtime | Core logic (DB, workgraph, runners, locks) |
 | `tui/` | runtime | Terminal UI (Blessed) |
 | `ui/` | runtime | Web UI (local HTTP server) |

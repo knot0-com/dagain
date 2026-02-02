@@ -15,6 +15,7 @@ import { kvGet, kvPut } from "../lib/db/kv.js";
 import { mailboxEnqueue } from "../lib/db/mailbox.js";
 import { ensureMailboxTable } from "../lib/db/migrate.js";
 import { loadConfig, saveConfig, defaultConfig } from "../lib/config.js";
+import { readSupervisorLock } from "../lib/lock.js";
 
 function json(res, status, body) {
   const text = JSON.stringify(body, null, 2) + "\n";
@@ -188,6 +189,64 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
     await ensureMailboxTable({ dbPath: paths.dbPath });
     const res = await mailboxEnqueue({ dbPath: paths.dbPath, command, args: args ?? {}, nowIso: new Date().toISOString() });
     return res.id;
+  }
+
+  async function readRunningSupervisorLock() {
+    const lock = await readSupervisorLock(paths.lockPath).catch(() => null);
+    const pid = Number(lock?.pid);
+    const lockHost = String(lock?.host || "").trim();
+    if (Number.isFinite(pid) && pid > 0 && lockHost === os.hostname()) {
+      try {
+        process.kill(pid, 0);
+        return lock;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  async function startSupervisorDetached() {
+    const existing = await readRunningSupervisorLock();
+    if (existing?.pid) return { alreadyRunning: true, pid: Number(existing.pid) || 0, message: "Supervisor already running." };
+
+    // Spawn with piped output so we can detect early failures.
+    const child = spawn(process.execPath, [dagainBinPath(), "run", "--no-live", "--no-color", "--no-prompt"], {
+      cwd: paths.rootDir,
+      env: { ...process.env, NO_COLOR: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (d) => {
+      stdout += d;
+    });
+    child.stderr.on("data", (d) => {
+      stderr += d;
+    });
+
+    // Wait briefly to see if the process starts or dies immediately.
+    const earlyExit = await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        child.unref?.();
+        resolve(null);
+      }, 2000);
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    });
+    if (earlyExit !== null && earlyExit !== 0) {
+      const errMsg = (stderr || stdout || "").trim().split("\n").pop() || `Process exited with code ${earlyExit}`;
+      throw new Error(errMsg);
+    }
+    const pid = child.pid || 0;
+    return { alreadyRunning: false, pid, message: `Started supervisor pid=${pid}.` };
   }
 
   function respondError(res, error) {
@@ -375,55 +434,8 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
 
       if (req.method === "POST" && url.pathname === "/api/control/start") {
         await requireToken(req);
-        const lockPath = path.join(paths.rootDir, ".dagain", ".supervisor.lock");
-        let alreadyRunning = false;
-        try {
-          const lockText = await readFile(lockPath, "utf8");
-          const lock = JSON.parse(lockText);
-          if (lock?.pid && String(lock.host || "").trim() === os.hostname()) {
-            try { process.kill(lock.pid, 0); alreadyRunning = true; } catch {
-              // PID not running — remove stale lock
-              await unlink(lockPath).catch(() => {});
-            }
-          }
-        } catch { /* no lock file */ }
-        if (alreadyRunning) {
-          json(res, 200, { ok: true, alreadyRunning: true, message: "Supervisor already running." });
-          return;
-        }
-        // Spawn with piped output so we can detect early failures
-        const child = spawn(process.execPath, [dagainBinPath(), "run", "--no-live", "--no-color", "--no-prompt"], {
-          cwd: paths.rootDir,
-          env: { ...process.env, NO_COLOR: "1" },
-          stdio: ["ignore", "pipe", "pipe"],
-          detached: true,
-        });
-        let stdout = "";
-        let stderr = "";
-        child.stdout.setEncoding("utf8");
-        child.stderr.setEncoding("utf8");
-        child.stdout.on("data", (d) => { stdout += d; });
-        child.stderr.on("data", (d) => { stderr += d; });
-        // Wait briefly to see if the process starts or dies immediately
-        const earlyExit = await new Promise((resolve) => {
-          const timer = setTimeout(() => {
-            child.stdout.destroy();
-            child.stderr.destroy();
-            child.unref?.();
-            resolve(null);
-          }, 2000);
-          child.on("close", (code) => {
-            clearTimeout(timer);
-            resolve(code);
-          });
-        });
-        if (earlyExit !== null && earlyExit !== 0) {
-          const errMsg = (stderr || stdout || "").trim().split("\n").pop() || `Process exited with code ${earlyExit}`;
-          json(res, 500, { ok: false, error: errMsg });
-          return;
-        }
-        const pid = child.pid || 0;
-        json(res, 200, { ok: true, pid, message: `Started supervisor pid=${pid}.` });
+        const started = await startSupervisorDetached();
+        json(res, 200, { ok: true, ...started });
         return;
       }
 
@@ -486,6 +498,7 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
           `Return JSON in <result> with {status, summary, data:{reply, ops, rollup}}.\n` +
           `Allowed ops:\n` +
           `- {"type":"status"}\n` +
+          `- {"type":"run.start"}\n` +
           `- {"type":"control.pause"}\n` +
           `- {"type":"control.resume"}\n` +
           `- {"type":"control.setWorkers","workers":3}\n` +
@@ -499,6 +512,7 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
           `\n` +
           `State counts: ${JSON.stringify(counts)}\n` +
           `Next runnable: ${next ? formatNodeLine(next) : "(none)"}\n` +
+          `Supervisor: ${snapshot?.supervisor?.pid ? `pid=${snapshot.supervisor.pid} host=${snapshot.supervisor.host || "?"}` : "(none)"}\n` +
           `Nodes (first 40):\n${nodeLines}\n` +
           (recent ? `\nRecent activity (tail):\n${recent}\n` : "") +
           `\nUser: ${message}\n`;
@@ -516,9 +530,14 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
         const ops = Array.isArray(data?.ops) ? data.ops : [];
 
         const applied = [];
+        let requestedStart = false;
         for (const op of ops) {
           const type = typeof op?.type === "string" ? op.type.trim() : "";
           if (!type || type === "status") continue;
+          if (type === "run.start") {
+            requestedStart = true;
+            continue;
+          }
 
           if (type === "control.pause") {
             const id = await enqueueControl({ command: "pause", args: {} });
@@ -550,6 +569,12 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
             applied.push({ type, id });
             continue;
           }
+        }
+
+        const hasControlOps = applied.some((a) => String(a?.type || "").startsWith("control."));
+        if (requestedStart || hasControlOps) {
+          const started = await startSupervisorDetached();
+          applied.push({ type: "run.start", ...started });
         }
 
         const now = new Date().toISOString();
@@ -593,6 +618,7 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
       if (req.method === "POST" && url.pathname === "/api/control/pause") {
         await requireToken(req);
         const id = await enqueueControl({ command: "pause", args: {} });
+        await startSupervisorDetached();
         json(res, 200, { ok: true, id, message: `Enqueued pause (id=${id}).` });
         return;
       }
@@ -600,6 +626,7 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
       if (req.method === "POST" && url.pathname === "/api/control/resume") {
         await requireToken(req);
         const id = await enqueueControl({ command: "resume", args: {} });
+        await startSupervisorDetached();
         json(res, 200, { ok: true, id, message: `Enqueued resume (id=${id}).` });
         return;
       }
@@ -607,6 +634,7 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
       if (req.method === "POST" && url.pathname === "/api/control/replan") {
         await requireToken(req);
         const id = await enqueueControl({ command: "replan_now", args: {} });
+        await startSupervisorDetached();
         json(res, 200, { ok: true, id, message: `Enqueued replan (id=${id}).` });
         return;
       }
@@ -618,6 +646,7 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
         const workers = Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
         if (workers == null) return json(res, 400, { error: "Invalid workers; expected {workers:number>0}." });
         const id = await enqueueControl({ command: "set_workers", args: { workers } });
+        await startSupervisorDetached();
         json(res, 200, { ok: true, id, message: `Enqueued set-workers=${workers} (id=${id}).` });
         return;
       }
@@ -628,6 +657,7 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
         const nodeId = typeof body?.nodeId === "string" ? body.nodeId.trim() : "";
         if (!nodeId) return json(res, 400, { error: "Missing nodeId." });
         const id = await enqueueControl({ command: "cancel", args: { nodeId } });
+        await startSupervisorDetached();
         json(res, 200, { ok: true, id, message: `Enqueued cancel node=${nodeId} (id=${id}).` });
         return;
       }

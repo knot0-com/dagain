@@ -7,3 +7,5 @@ dist/
 .runs/
 *.log
 active_context.md
+docs/*
+docs/plans/*

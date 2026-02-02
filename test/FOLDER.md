@@ -38,6 +38,8 @@ It covers CLI behavior, DB migrations, scheduling logic, and integrations.
 | `db-init.test.js` | test | DB initialization |
 | `db-migrate-required-status.test.js` | test | Dep required-status migration |
 | `deadlock-auto-reset.test.js` | test | Deadlock auto-reset behavior |
+| `default-workers-min.test.js` | test | Default workers floor (min=3) |
+| `control-autostart.test.js` | test | Control ops auto-start supervisor when stopped |
 | `e2e.test.js` | test | End-to-end flows + run artifacts |
 | `failure-escalation-promotion.test.js` | test | Failure escalation: runner promotion |
 | `failure-escalation-scope.test.js` | test | Failure escalation: scope handling |
@@ -74,6 +76,7 @@ It covers CLI behavior, DB migrations, scheduling logic, and integrations.
 | `state-dir-taskgraph.test.js` | test | Legacy state dir migration |
 | `status-inprogress.test.js` | test | Status in-progress rendering |
 | `templates-sync.test.js` | test | Templates sync behavior |
+| `ui-e2e.test.js` | test | End-to-end Web UI + SSE + supervisor start |
 | `ui-server.test.js` | test | Web UI server behavior |
 | `workgraph-snapshot.test.js` | test | Workgraph snapshot behavior |
 | `worktrees-parallel-executors.test.js` | test | Worktrees + parallel executors |

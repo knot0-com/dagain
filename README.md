@@ -54,6 +54,7 @@ dagain run --no-post-chat
 dagain status
 dagain chat          # TUI by default on a real terminal
 dagain chat --plain  # force the plain readline REPL (useful for piping / non-TTY)
+dagain control resume # enqueue resume (auto-starts supervisor if stopped; add --no-start to enqueue only)
 
 # 4) optional: live dashboards
 dagain tui           # terminal dashboard + chat (shows a GUI URL)

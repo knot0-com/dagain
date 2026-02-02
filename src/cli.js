@@ -102,10 +102,10 @@ function usage() {
 Usage:
   dagain [<goal...>] [--color] [--no-color]
   dagain chat [--plain] [--no-color]
-  dagain control pause|resume
-  dagain control set-workers --workers=<n>
-  dagain control replan
-  dagain control cancel --node=<id>
+  dagain control pause|resume [--no-start]
+  dagain control set-workers --workers=<n> [--no-start]
+  dagain control replan [--no-start]
+  dagain control cancel --node=<id> [--no-start]
   dagain node add --id=<id> --title="..." [--type=<t>] [--status=<s>] [--parent=<id>] [--runner=<name>] [--inputs=<json>] [--ownership=<json>] [--acceptance=<json>] [--verify=<json>] [--retry-policy=<json>] [--depends-on=<json|a,b>]
   dagain node update --id=<id> [--title="..."] [--type=<t>] [--parent=<id>] [--runner=<name>] [--inputs=<json>] [--ownership=<json>] [--acceptance=<json>] [--verify=<json>] [--retry-policy=<json>] [--force]
   dagain node set-status --id=<id> --status=<open|done|failed|needs_human> [--force]
@@ -1610,9 +1610,11 @@ async function runCommand(rootDir, flags) {
   const autoResetFailedMaxNum = Number(autoResetFailedMaxRaw);
   const autoResetFailedMax = Number.isFinite(autoResetFailedMaxNum) && autoResetFailedMaxNum >= 0 ? autoResetFailedMaxNum : 1;
 
-  const workersRaw = flags.workers ?? config.supervisor?.workers ?? 3;
+  const hasWorkersFlag = Object.prototype.hasOwnProperty.call(flags, "workers") && flags.workers != null;
+  const workersRaw = hasWorkersFlag ? flags.workers : config.supervisor?.workers;
   const workersNum = Number(workersRaw);
-  const requestedWorkers = Number.isFinite(workersNum) && workersNum > 0 ? Math.floor(workersNum) : 3;
+  const parsedWorkers = Number.isFinite(workersNum) && workersNum > 0 ? Math.floor(workersNum) : 0;
+  const requestedWorkers = hasWorkersFlag ? (parsedWorkers > 0 ? parsedWorkers : 3) : Math.max(parsedWorkers, 3);
   const workers = dryRun || once ? 1 : requestedWorkers;
   const worktreeMode = normalizeWorktreeMode(config?.supervisor?.worktrees?.mode);
   const worktreesDir = worktreeMode === "off" ? null : resolveWorktreesDir({ paths, config });
@@ -3730,13 +3732,20 @@ async function runChatMicrocall({ rootDir, paths, config, prompt, runnerName, ro
 
 async function startSupervisorDetached({ rootDir, flags }) {
   const paths = dagainPaths(rootDir);
-  const lock = await readSupervisorLock(paths.lockPath);
-  if (lock?.pid && String(lock.host || "").trim() === os.hostname()) {
-    process.stdout.write(`Supervisor already running pid=${lock.pid}.\n`);
-    return;
+  const lock = await readSupervisorLock(paths.lockPath).catch(() => null);
+  const pid = Number(lock?.pid);
+  const host = String(lock?.host || "").trim();
+  if (Number.isFinite(pid) && pid > 0 && host === os.hostname()) {
+    try {
+      process.kill(pid, 0);
+      process.stdout.write(`Supervisor already running pid=${pid}.\n`);
+      return;
+    } catch {
+      // stale lock; continue
+    }
   }
   const dagainBin = fileURLToPath(new URL("../bin/dagain.js", import.meta.url));
-  const args = [dagainBin, "run", "--no-live", "--no-color"];
+  const args = [dagainBin, "run", "--no-live", "--no-color", "--no-prompt"];
   const child = spawn(process.execPath, args, {
     cwd: paths.rootDir,
     env: { ...process.env, NO_COLOR: "1" },
@@ -4514,6 +4523,9 @@ async function controlCommand(rootDir, positional, flags) {
 
   const sub = String(positional[0] || "").trim();
   if (!sub) throw new Error("Missing control subcommand. Use pause|resume|set-workers|replan|cancel.");
+  const shouldAutoStart = sub === "resume" || sub === "set-workers" || sub === "replan" || sub === "cancel";
+  const noStart = Boolean(flags["no-start"]) || Boolean(flags.noStart);
+  const shouldStartSupervisor = shouldAutoStart && !noStart;
 
   const now = nowIso();
   if (sub === "pause") {
@@ -4525,6 +4537,7 @@ async function controlCommand(rootDir, positional, flags) {
   if (sub === "resume") {
     const res = await mailboxEnqueue({ dbPath: paths.dbPath, command: "resume", args: {}, nowIso: now });
     process.stdout.write(`Enqueued resume (id=${res.id}).\n`);
+    if (shouldStartSupervisor) await startSupervisorDetached({ rootDir, flags });
     return;
   }
 
@@ -4535,12 +4548,14 @@ async function controlCommand(rootDir, positional, flags) {
     if (workers == null) throw new Error("Missing --workers=<n>.");
     const res = await mailboxEnqueue({ dbPath: paths.dbPath, command: "set_workers", args: { workers }, nowIso: now });
     process.stdout.write(`Enqueued set-workers=${workers} (id=${res.id}).\n`);
+    if (shouldStartSupervisor) await startSupervisorDetached({ rootDir, flags });
     return;
   }
 
   if (sub === "replan") {
     const res = await mailboxEnqueue({ dbPath: paths.dbPath, command: "replan_now", args: {}, nowIso: now });
     process.stdout.write(`Enqueued replan (id=${res.id}).\n`);
+    if (shouldStartSupervisor) await startSupervisorDetached({ rootDir, flags });
     return;
   }
 
@@ -4550,6 +4565,7 @@ async function controlCommand(rootDir, positional, flags) {
     if (!nodeId) throw new Error("Missing --node=<id>.");
     const res = await mailboxEnqueue({ dbPath: paths.dbPath, command: "cancel", args: { nodeId }, nowIso: now });
     process.stdout.write(`Enqueued cancel node=${nodeId} (id=${res.id}).\n`);
+    if (shouldStartSupervisor) await startSupervisorDetached({ rootDir, flags });
     return;
   }
 

@@ -84,12 +84,19 @@ function runCliCapture({ cwd, args }) {
 async function startSupervisorDetached({ rootDir, log }) {
   const paths = dagainPaths(rootDir);
   const lock = await readSupervisorLock(paths.lockPath).catch(() => null);
-  if (lock?.pid && String(lock.host || "").trim() === os.hostname()) {
-    log(`Supervisor already running pid=${lock.pid}.`);
-    return;
+  const pid = Number(lock?.pid);
+  const host = String(lock?.host || "").trim();
+  if (Number.isFinite(pid) && pid > 0 && host === os.hostname()) {
+    try {
+      process.kill(pid, 0);
+      log(`Supervisor already running pid=${pid}.`);
+      return;
+    } catch {
+      // stale lock; continue
+    }
   }
 
-  const child = spawn(process.execPath, [dagainBinPath(), "run", "--no-live", "--no-color"], {
+  const child = spawn(process.execPath, [dagainBinPath(), "run", "--no-live", "--no-color", "--no-prompt"], {
     cwd: paths.rootDir,
     env: { ...process.env, NO_COLOR: "1" },
     stdio: ["ignore", "ignore", "ignore"],
