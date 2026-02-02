@@ -39,9 +39,9 @@ test("help: run documents --workers flag", async () => {
   assert.match(res.stdout, /--workers(?:=<n>)?/);
 });
 
-test("defaultConfig: supervisor.workers defaults to 1", () => {
+test("defaultConfig: supervisor.workers defaults to 3", () => {
   const config = defaultConfig();
-  assert.equal(config?.supervisor?.workers, 1);
+  assert.equal(config?.supervisor?.workers, 3);
 });
 
 test("defaultConfig: shellVerify cmd supports CHOREO_/TASKGRAPH_ fallbacks", () => {

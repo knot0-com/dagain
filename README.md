@@ -1,3 +1,14 @@
+---
+title: "dagain"
+status: active
+date: "2026-02-02"
+parents: []
+tags: ["dagain", "docs"]
+input: "GitHub/npm readers and CLI users"
+output: "User-facing docs for `dagain`"
+position: "Repo/package README and primary usage reference"
+---
+
 <!-- Input — GitHub/npm readers and CLI users. If this file changes, update this header and the folder Markdown. -->
 <!-- Output — user-facing docs for `dagain`. If this file changes, update this header and the folder Markdown. -->
 <!-- Position — repo/package README and primary usage reference. If this file changes, update this header and the folder Markdown. -->
@@ -34,7 +45,7 @@ dagain --help
 # 1) init state + config (creates .dagain/)
 dagain init --goal "Add a CLI flag --foo and tests" --no-refine
 
-# 2) run the supervisor (streams runner output; drops into chat on completion)
+# 2) run the supervisor (defaults to 3 workers; drops into chat on completion)
 dagain run --live
 # disable post-run chat:
 dagain run --no-post-chat
@@ -49,6 +60,8 @@ dagain tui           # terminal dashboard + chat (shows a GUI URL)
 dagain ui            # web dashboard (chat left + DAG + node logs, runs drawer, pan/zoom+fit, controls)
 ```
 
+Note: if you run `dagain` as root (e.g. via `sudo`) inside a repo, it will prefer executing runners as the repo owner to avoid root-owned outputs.
+
 ### Common chat controls
 
 Inside `dagain chat` (both TUI and `--plain`):
@@ -56,7 +69,7 @@ Inside `dagain chat` (both TUI and `--plain`):
 - `/status` — print graph status
 - `/run` — start supervisor
 - `/pause` / `/resume` — stop/resume launching new nodes (in-flight nodes finish)
-- `/workers <n>` — set concurrency
+- `/workers <n>` — set concurrency (default: 3)
 - `/replan` — force plan node (`plan-000`) to reopen and block launches until it completes
 - `/cancel <nodeId>` — cancel a running node (best-effort)
 - `/artifacts [nodeId]` — show run artifact paths (and last stdout/result for a node)

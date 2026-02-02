@@ -1,3 +1,14 @@
+---
+title: "choreo/test"
+status: active
+date: "2026-02-02"
+parents: ["choreo"]
+tags: ["dagain", "tests", "folder"]
+input: "Node.js test runner and test helpers"
+output: "Folder responsibility and file index"
+position: "Test suite overview"
+---
+
 If this folder changes, this document must be updated.
 
 This folder contains the `dagain` Node.js test suite (`node --test`).
@@ -37,7 +48,7 @@ It covers CLI behavior, DB migrations, scheduling logic, and integrations.
 | `kv-retention.test.js` | test | KV retention and history behavior |
 | `mailbox-db.test.js` | test | Mailbox table behavior |
 | `mailbox-migration.test.js` | test | Mailbox schema migration |
-| `mailbox-supervisor.test.js` | test | Supervisor mailbox interactions |
+| `mailbox-supervisor.test.js` | test | Supervisor mailbox interactions (pause/resume/cancel + orphan-lock recovery) |
 | `microcall.test.js` | test | `dagain microcall` CLI behavior |
 | `node-cli.test.js` | test | `dagain node` CLI behavior |
 | `ownership-locks.test.js` | test | Ownership locks behavior |

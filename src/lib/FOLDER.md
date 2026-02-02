@@ -1,3 +1,14 @@
+---
+title: "choreo/src/lib"
+status: active
+date: "2026-02-02"
+parents: ["choreo/src"]
+tags: ["dagain", "runtime", "folder"]
+input: "Core libraries used by CLI/supervisor"
+output: "Folder responsibility and file index"
+position: "`src/lib/` overview"
+---
+
 If this folder changes, this document must be updated.
 
 This folder contains the core `dagain` libraries used by the CLI and supervisor.
@@ -6,7 +17,7 @@ It owns config/state IO, SQLite DB helpers, and workgraph scheduling.
 | Name | Role/Status | Responsibility |
 | --- | --- | --- |
 | `args.js` | runtime | CLI argument parsing utilities |
-| `config.js` | runtime | Config + path helpers for `.dagain/` |
+| `config.js` | runtime | Config + path helpers for `.dagain/` (default workers, runner defaults) |
 | `crypto.js` | runtime | File hashing helpers |
 | `dashboard.js` | runtime | Snapshot builder for dashboards (counts/nodes/next) |
 | `db/` | runtime | SQLite access + schema helpers |

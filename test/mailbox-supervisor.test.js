@@ -1,3 +1,7 @@
+// Input — node:test, child_process, filesystem/tempdirs, and sqlite helpers. If this file changes, update this header and the folder Markdown.
+// Output — integration tests for supervisor mailbox commands and scheduling. If this file changes, update this header and the folder Markdown.
+// Position — regression coverage for pause/resume/workers/replan/cancel + orphan lock recovery. If this file changes, update this header and the folder Markdown.
+
 import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
@@ -101,6 +105,114 @@ function nodeStatus(rows, id) {
   return rows.find((r) => r.id === id)?.status || null;
 }
 
+test("run: clears orphaned in_progress nodes locked by supervisor pid", { timeout: 25_000 }, async () => {
+  const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(dagainRoot, "bin", "dagain.js");
+  const mockSleepAgentPath = fileURLToPath(new URL("../scripts/mock-sleep-agent.js", import.meta.url));
+
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-orphan-lock-"));
+  const initRes = await runCli({
+    binPath,
+    cwd: tmpDir,
+    args: ["init", "--goal", "Orphan lock test", "--no-refine", "--force", "--no-color"],
+  });
+  assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
+
+  await writeFile(
+    path.join(tmpDir, ".dagain", "config.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        runners: {
+          mockExecutor: { cmd: `MOCK_SLEEP_MS=50 node ${mockSleepAgentPath} executor` },
+          mockVerifier: { cmd: `node ${mockSleepAgentPath} verifier` },
+          mockIntegrator: { cmd: `node ${mockSleepAgentPath} integrator` },
+          mockFinalVerifier: { cmd: `node ${mockSleepAgentPath} finalVerifier` },
+        },
+        roles: {
+          main: "mockExecutor",
+          planner: "mockExecutor",
+          executor: "mockExecutor",
+          verifier: "mockVerifier",
+          integrator: "mockIntegrator",
+          finalVerifier: "mockFinalVerifier",
+          researcher: "mockExecutor",
+        },
+        supervisor: { idleSleepMs: 0, staleLockSeconds: 3600, mailboxPollMs: 0 },
+      },
+      null,
+      2,
+    ) + "\n",
+    "utf8",
+  );
+
+  const dbPath = path.join(tmpDir, ".dagain", "state.sqlite");
+  await seedDonePlan(dbPath);
+  await seedTask(dbPath, { id: "task-a", title: "a", ownership: ["a.txt"] });
+  await seedTask(dbPath, { id: "task-b", title: "b", ownership: ["b.txt"] });
+  await sqliteExec(dbPath, "INSERT OR IGNORE INTO deps(node_id, depends_on_id) VALUES('task-b','task-a');\n");
+
+  const pauseRes = await runCli({ binPath, cwd: tmpDir, args: ["control", "pause", "--no-color"] });
+  assert.equal(pauseRes.code, 0, pauseRes.stderr || pauseRes.stdout);
+
+  const { child, done } = spawnCli({
+    binPath,
+    cwd: tmpDir,
+    args: ["run", "--workers", "2", "--interval-ms", "0", "--no-live", "--no-color"],
+  });
+
+  try {
+    const lockPath = path.join(tmpDir, ".dagain", "lock");
+    await waitFor(async () => {
+      const rows = await sqliteJson(dbPath, "SELECT status FROM mailbox WHERE command='pause' ORDER BY id DESC LIMIT 1;");
+      return rows[0]?.status === "done";
+    });
+
+    let lock = null;
+    await waitFor(async () => {
+      try {
+        lock = JSON.parse(await readFile(lockPath, "utf8"));
+        return Number.isFinite(Number(lock?.pid)) && Number(lock.pid) > 0;
+      } catch {
+        return false;
+      }
+    });
+
+    const pid = Number(lock.pid);
+    const host = String(lock.host || os.hostname()).replace(/'/g, "''");
+    const now = new Date().toISOString();
+
+    await sqliteExec(
+      dbPath,
+      `UPDATE nodes\n` +
+        `SET status='in_progress',\n` +
+        `    lock_run_id='orphan-run',\n` +
+        `    lock_started_at='${now.replace(/'/g, "''")}',\n` +
+        `    lock_pid=${String(pid)},\n` +
+        `    lock_host='${host}',\n` +
+        `    updated_at='${now.replace(/'/g, "''")}'\n` +
+        `WHERE id='task-a';\n`,
+    );
+
+    const resumeRes = await runCli({ binPath, cwd: tmpDir, args: ["control", "resume", "--no-color"] });
+    assert.equal(resumeRes.code, 0, resumeRes.stderr || resumeRes.stdout);
+
+    await waitFor(async () => {
+      const rows = await sqliteJson(dbPath, "SELECT id, status FROM nodes WHERE id IN ('task-a','task-b') ORDER BY id;");
+      return nodeStatus(rows, "task-a") === "done" && nodeStatus(rows, "task-b") === "done";
+    });
+
+    const runRes = await done;
+    assert.equal(runRes.code, 0, runRes.stderr || runRes.stdout);
+  } finally {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // ignore
+    }
+  }
+});
+
 test("mailbox: pause/resume gates scheduling", { timeout: 20_000 }, async () => {
   const dagainRoot = fileURLToPath(new URL("..", import.meta.url));
   const binPath = path.join(dagainRoot, "bin", "dagain.js");
@@ -151,7 +263,7 @@ test("mailbox: pause/resume gates scheduling", { timeout: 20_000 }, async () => 
   const { child, done } = spawnCli({
     binPath,
     cwd: tmpDir,
-    args: ["run", "--interval-ms", "0", "--max-iterations", "200", "--no-live", "--no-color"],
+    args: ["run", "--workers", "1", "--interval-ms", "0", "--max-iterations", "200", "--no-live", "--no-color"],
   });
 
   try {

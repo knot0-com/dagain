@@ -56,7 +56,7 @@ export function defaultConfig() {
       researcher: "codex"
     },
 		    supervisor: {
-		      workers: 1,
+		      workers: 3,
 		      idleSleepMs: 2000,
 		      staleLockSeconds: 3600,
 	      autoResetFailedMax: 1,

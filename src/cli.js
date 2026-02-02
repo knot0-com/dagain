@@ -295,30 +295,24 @@ async function resolveSpawnIdentity({ rootDir }) {
   const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
   if (!isRoot) return null;
 
-  const sudoUid = Number(process.env.SUDO_UID || "");
-  const sudoGid = Number(process.env.SUDO_GID || "");
-  const hasSudoIds = Number.isFinite(sudoUid) && sudoUid > 0 && Number.isFinite(sudoGid) && sudoGid > 0;
-
-  if (hasSudoIds) {
-    const info = await lookupPasswdUserByUid(sudoUid);
-    const username = typeof info?.username === "string" && info.username ? info.username : String(process.env.SUDO_USER || "");
-    const home = typeof info?.home === "string" && info.home ? info.home : null;
-    return { uid: sudoUid, gid: sudoGid, username, home };
-  }
-
+  // Prefer running as the owner of the repo/rootDir. If the rootDir is root-owned
+  // (common in tests/tmp dirs), do not attempt to drop privileges via SUDO_* env
+  // vars — it usually causes EACCES / module-not-found failures.
   try {
     const st = await stat(rootDir);
     const uid = Number(st.uid);
     const gid = Number(st.gid);
-    if (!Number.isFinite(uid) || uid <= 0) return null;
-    if (!Number.isFinite(gid) || gid <= 0) return null;
-    const info = await lookupPasswdUserByUid(uid);
-    const username = typeof info?.username === "string" && info.username ? info.username : "";
-    const home = typeof info?.home === "string" && info.home ? info.home : null;
-    return { uid, gid, username, home };
+    if (Number.isFinite(uid) && uid > 0 && Number.isFinite(gid) && gid > 0) {
+      const info = await lookupPasswdUserByUid(uid);
+      const username = typeof info?.username === "string" && info.username ? info.username : "";
+      const home = typeof info?.home === "string" && info.home ? info.home : null;
+      return { uid, gid, username, home };
+    }
   } catch {
-    return null;
+    // ignore
   }
+
+  return null;
 }
 
 function mergeEnv(a, b) {
@@ -1616,9 +1610,9 @@ async function runCommand(rootDir, flags) {
   const autoResetFailedMaxNum = Number(autoResetFailedMaxRaw);
   const autoResetFailedMax = Number.isFinite(autoResetFailedMaxNum) && autoResetFailedMaxNum >= 0 ? autoResetFailedMaxNum : 1;
 
-  const workersRaw = flags.workers ?? config.supervisor?.workers ?? 1;
+  const workersRaw = flags.workers ?? config.supervisor?.workers ?? 3;
   const workersNum = Number(workersRaw);
-  const requestedWorkers = Number.isFinite(workersNum) && workersNum > 0 ? Math.floor(workersNum) : 1;
+  const requestedWorkers = Number.isFinite(workersNum) && workersNum > 0 ? Math.floor(workersNum) : 3;
   const workers = dryRun || once ? 1 : requestedWorkers;
   const worktreeMode = normalizeWorktreeMode(config?.supervisor?.worktrees?.mode);
   const worktreesDir = worktreeMode === "off" ? null : resolveWorktreesDir({ paths, config });
@@ -1967,6 +1961,15 @@ async function runCommand(rootDir, flags) {
           continue;
         }
 
+        const orphanUnlocked = await clearOrphanedSelfLocksDb({ paths, activeNodeIds: new Set(inFlight.keys()) });
+        if (orphanUnlocked) {
+          await serial.enqueue(async () => {
+            const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+            await syncTaskPlan({ paths, graph });
+          });
+          continue;
+        }
+
         await maybeClearReplanPause();
         const pausedManual = Boolean(control.manualPaused);
         const pausedReplan = !pausedManual && Boolean(control.replanPaused);
@@ -2242,6 +2245,13 @@ async function runCommand(rootDir, flags) {
         continue;
       }
 
+      const orphanUnlocked = await clearOrphanedSelfLocksDb({ paths, activeNodeIds: new Set() });
+      if (orphanUnlocked) {
+        const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+        await syncTaskPlan({ paths, graph });
+        continue;
+      }
+
       await maybeClearReplanPause();
       const wantsParallelWorkers = !dryRun && !once && Number(control.maxWorkers) > 1;
       if (wantsParallelWorkers) {
@@ -2505,6 +2515,35 @@ async function clearStaleLocksDb({ paths, staleLockSeconds }) {
     const status = String(row?.status || "").toLowerCase();
     const nextStatus = status === "in_progress" ? "open" : String(row?.status || "open");
     await unlockNodeDb({ dbPath: paths.dbPath, nodeId, status: nextStatus, nowIso: nowIso() });
+    changed = true;
+  }
+  return changed;
+}
+
+async function clearOrphanedSelfLocksDb({ paths, activeNodeIds = null }) {
+  const host = os.hostname();
+  const pid = process.pid;
+  const active =
+    activeNodeIds instanceof Set
+      ? activeNodeIds
+      : new Set(Array.isArray(activeNodeIds) ? activeNodeIds.map((v) => String(v || "").trim()).filter(Boolean) : []);
+
+  const rows = await sqliteQueryJson(
+    paths.dbPath,
+    `SELECT id\n` +
+      `FROM nodes\n` +
+      `WHERE status='in_progress'\n` +
+      `  AND lock_run_id IS NOT NULL\n` +
+      `  AND lock_pid=${String(pid)}\n` +
+      `  AND lock_host=${sqlQuote(host)};\n`,
+  );
+
+  let changed = false;
+  for (const row of rows) {
+    const nodeId = String(row?.id || "").trim();
+    if (!nodeId) continue;
+    if (active.has(nodeId)) continue;
+    await unlockNodeDb({ dbPath: paths.dbPath, nodeId, status: "open", nowIso: nowIso() });
     changed = true;
   }
   return changed;
