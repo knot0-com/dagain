@@ -153,8 +153,10 @@ Notes:
 
 ## Parallelism and worktrees
 
-- `dagain run --workers N` runs up to `N` nodes concurrently (subject to ownership locks).
+- `dagain run --workers N` runs up to `N` nodes concurrently (subject to ownership locks). If you omit `--workers`, Dagain defaults to at least 3 workers.
 - For conflict-prone code edits, set `supervisor.worktrees.mode="always"` to run executors in worktrees and merge serially.
+- If a node reaches `needs_human` in a non-interactive context, the supervisor waits up to `supervisor.needsHumanTimeoutMs` (default: 30 minutes), then auto-answers with “decide safest default” and reopens the node so planning can continue.
+- To unblock `needs_human` immediately, use `dagain answer --node <id> --answer "..."` or (in the web UI chat) send `/answer [nodeId] <answer...>`.
 
 ## State layout
 
@@ -165,6 +167,7 @@ Dagain stores state in:
 - `.dagain/workgraph.json` — human-readable graph snapshot (mirrors SQLite)
 - `.dagain/lock` — supervisor lock (used by `dagain stop`)
 - `.dagain/runs/` — per-node packets + logs + results
+- The UI “Log” panel shows **human-readable result output** (status/summary, checkpoint question) derived from `result.json` by default; raw stdout is still available in `.dagain/runs/*/stdout.log` and the Runs drawer.
 - `.dagain/artifacts/` — non-source outputs (reports, scratch notes, generated data)
 - `.dagain/checkpoints/` — human-in-the-loop checkpoints
 - `.dagain/memory/` — durable notes + logs (`task_plan.md`, `findings.md`, `progress.md`)

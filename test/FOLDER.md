@@ -52,6 +52,7 @@ It covers CLI behavior, DB migrations, scheduling logic, and integrations.
 | `mailbox-migration.test.js` | test | Mailbox schema migration |
 | `mailbox-supervisor.test.js` | test | Supervisor mailbox interactions (pause/resume/cancel + orphan-lock recovery) |
 | `microcall.test.js` | test | `dagain microcall` CLI behavior |
+| `needs-human-timeout.test.js` | test | needs_human timeout auto-answer fallback |
 | `node-cli.test.js` | test | `dagain node` CLI behavior |
 | `ownership-locks.test.js` | test | Ownership locks behavior |
 | `packet-db-pointers.test.js` | test | Packet DB pointers behavior |
@@ -78,5 +79,7 @@ It covers CLI behavior, DB migrations, scheduling logic, and integrations.
 | `templates-sync.test.js` | test | Templates sync behavior |
 | `ui-e2e.test.js` | test | End-to-end Web UI + SSE + supervisor start |
 | `ui-server.test.js` | test | Web UI server behavior |
+| `ui-node-human-log.test.js` | test | Node log panel shows result-derived human text |
+| `web-chat-answer-e2e.test.js` | test | Web chat `/answer` unblocks needs_human and run completes |
 | `workgraph-snapshot.test.js` | test | Workgraph snapshot behavior |
 | `worktrees-parallel-executors.test.js` | test | Worktrees + parallel executors |

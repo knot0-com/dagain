@@ -1061,6 +1061,7 @@ let selectedNodeId = "";
 let logPollTimer = null;
 let runs = [];
 let selectedRunId = "";
+let needsHumanNotified = new Set();
 
 function readViewPrefs() {
   try {
@@ -1388,6 +1389,20 @@ function render(snapshot) {
   elCounts.textContent = Object.keys(counts).sort().map((k) => k + "=" + counts[k]).join("  ");
 
   const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
+  try {
+    const current = new Set();
+    for (const n of nodes) {
+      if (!n || !n.id) continue;
+      if (statusKey(n) !== "needs_human") continue;
+      current.add(n.id);
+      if (needsHumanNotified.has(n.id)) continue;
+      const q = n.checkpoint && n.checkpoint.question ? String(n.checkpoint.question) : "";
+      toast("Needs human input: " + n.id + (q ? (" — " + truncateText(q, 120)) : ""), "warn");
+    }
+    needsHumanNotified = current;
+  } catch {
+    // ignore
+  }
   if (!selectedNodeId) {
     selectedNodeId = (snapshot.next && snapshot.next.id) ? snapshot.next.id : ((nodes[0] && nodes[0].id) ? nodes[0].id : "");
   }

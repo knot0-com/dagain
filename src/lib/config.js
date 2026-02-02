@@ -59,6 +59,7 @@ export function defaultConfig() {
 		      workers: 3,
 		      idleSleepMs: 2000,
 		      staleLockSeconds: 3600,
+		      needsHumanTimeoutMs: 30 * 60 * 1000,
 	      autoResetFailedMax: 1,
 	      runnerPool: {
 	        mode: "off",

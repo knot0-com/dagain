@@ -55,7 +55,11 @@ function formatNodeLine(node) {
   const title = node?.title || "(untitled)";
   const type = node?.type || "(type?)";
   const status = node?.status || (node?.lock?.runId ? "in_progress" : "(status?)");
-  return `${id} [${type}] (${status}) \u2014 ${title}`;
+  const q =
+    String(status || "").toLowerCase() === "needs_human" && node?.checkpoint?.question
+      ? ` — q: ${truncateText(node.checkpoint.question, 80)}`
+      : "";
+  return `${id} [${type}] (${status}) \u2014 ${title}${q}`;
 }
 
 function dagainBinPath() {
@@ -127,6 +131,37 @@ async function readTailText(filePath, maxBytes) {
     } finally {
       await fh.close();
     }
+  } catch {
+    return "";
+  }
+}
+
+function formatHumanResultText(result) {
+  const status = typeof result?.status === "string" ? result.status.trim() : "";
+  const summary = typeof result?.summary === "string" ? result.summary.trim() : "";
+  const lines = [];
+  if (status) lines.push(`status: ${status}`);
+  if (summary) lines.push(`summary: ${summary}`);
+  const checkpoint = result?.checkpoint && typeof result.checkpoint === "object" ? result.checkpoint : null;
+  const question = typeof checkpoint?.question === "string" ? checkpoint.question.trim() : "";
+  const context = typeof checkpoint?.context === "string" ? checkpoint.context.trim() : "";
+  const options = Array.isArray(checkpoint?.options) ? checkpoint.options.map((o) => String(o)) : [];
+  if (question) lines.push(`question: ${question}`);
+  if (context) lines.push(`context: ${context}`);
+  if (options.length > 0) {
+    lines.push("options:");
+    for (const opt of options) lines.push(`- ${opt}`);
+  }
+  return lines.join("\n").trim();
+}
+
+async function readResultHumanText(resultPathAbs) {
+  if (!resultPathAbs) return "";
+  try {
+    const raw = await readFile(resultPathAbs, "utf8");
+    const parsed = safeJsonParse(raw, null);
+    if (!parsed) return "";
+    return formatHumanResultText(parsed);
   } catch {
     return "";
   }
@@ -306,17 +341,17 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
         if (!node) return json(res, 404, { error: `Node not found: ${nodeId}` });
 
         const lockRunId = typeof node?.lock?.runId === "string" ? node.lock.runId : "";
-        let stdoutRel = "";
+        let resultRel = "";
         if (lockRunId) {
-          stdoutRel = path.relative(paths.rootDir, path.join(paths.runsDir, lockRunId, "stdout.log"));
+          resultRel = path.relative(paths.rootDir, path.join(paths.runsDir, lockRunId, "result.json"));
         } else {
-          const stdoutRow = await kvGet({ dbPath: paths.dbPath, nodeId, key: "out.last_stdout_path" }).catch(() => null);
-          stdoutRel = typeof stdoutRow?.value_text === "string" ? stdoutRow.value_text.trim() : "";
+          const resultRow = await kvGet({ dbPath: paths.dbPath, nodeId, key: "out.last_result_path" }).catch(() => null);
+          resultRel = typeof resultRow?.value_text === "string" ? resultRow.value_text.trim() : "";
         }
 
-        const stdoutAbs = stdoutRel ? safeResolveUnderRoot(paths.rootDir, stdoutRel) : null;
-        const text = stdoutAbs ? await readTailText(stdoutAbs, tail) : "";
-        json(res, 200, { nodeId, path: stdoutRel || "", text });
+        const resultAbs = resultRel ? safeResolveUnderRoot(paths.rootDir, resultRel) : null;
+        const text = resultAbs ? await readResultHumanText(resultAbs) : "";
+        json(res, 200, { nodeId, path: resultRel || "", text: text || (lockRunId ? "status: in_progress" : "") });
         return;
       }
 
@@ -473,6 +508,56 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
         const chatTurnsParsed = safeJsonParse(typeof chatTurnsRow?.value_text === "string" ? chatTurnsRow.value_text : "", []);
         const chatTurns = Array.isArray(chatTurnsParsed) ? chatTurnsParsed : [];
 
+        if (message.startsWith("/answer")) {
+          const parts = message.split(/\s+/).filter(Boolean);
+          const rest = parts.slice(1);
+          if (rest.length === 0) return json(res, 400, { error: "Usage: /answer [nodeId] <answer...>" });
+
+          const needsHumanIds = (Array.isArray(snapshot?.nodes) ? snapshot.nodes : [])
+            .filter((n) => String(n?.status || "").toLowerCase() === "needs_human")
+            .map((n) => String(n?.id || "").trim())
+            .filter(Boolean);
+
+          let nodeId = "";
+          let answerParts = rest;
+          if (answerParts.length >= 2 && needsHumanIds.includes(answerParts[0])) {
+            nodeId = answerParts[0];
+            answerParts = answerParts.slice(1);
+          }
+          const answer = answerParts.join(" ").trim();
+          if (!answer) return json(res, 400, { error: "Missing answer text." });
+
+          const args = ["answer", "--no-prompt", "--answer", answer];
+          if (nodeId) args.push("--node", nodeId);
+          const answered = await runCliCapture({ cwd: paths.rootDir, args });
+          if (answered.code !== 0) throw new Error(String(answered.stderr || answered.stdout || `answer failed (exit ${answered.code})`));
+
+          const started = await startSupervisorDetached();
+          const applied = [{ type: "checkpoint.answer", nodeId: nodeId || null, ...started }];
+          const reply = `Recorded answer${nodeId ? ` for ${nodeId}` : ""} and reopened checkpoint.`;
+
+          const now = new Date().toISOString();
+          const turn = {
+            at: now,
+            user: truncateText(message, 800),
+            reply: truncateText(reply, 1200),
+            ops: ["checkpoint.answer"],
+          };
+          const turnsNext = chatTurns.concat([turn]).slice(-10);
+          await kvPut({ dbPath: paths.dbPath, nodeId: "__run__", key: "chat.summary", valueText: truncateText(reply, 400), nowIso: now });
+          await kvPut({
+            dbPath: paths.dbPath,
+            nodeId: "__run__",
+            key: "chat.last_ops",
+            valueText: truncateText(JSON.stringify([{ type: "checkpoint.answer", nodeId: nodeId || null }]), 4000),
+            nowIso: now,
+          });
+          await kvPut({ dbPath: paths.dbPath, nodeId: "__run__", key: "chat.turns", valueText: JSON.stringify(turnsNext), nowIso: now });
+
+          json(res, 200, { ok: true, reply, applied, chat: { turns: turnsNext, rollup: chatRollup, summary: truncateText(reply, 400) } });
+          return;
+        }
+
         let memorySection = "";
         if (chatRollup || chatSummary || chatLastOpsText || chatTurns.length > 0) {
           const lines = [];
@@ -504,8 +589,10 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
           `- {"type":"control.setWorkers","workers":3}\n` +
           `- {"type":"control.replan"}\n` +
           `- {"type":"control.cancel","nodeId":"task-001"}\n` +
+          `- {"type":"checkpoint.answer","nodeId":"task-002","answer":"..."}\n` +
           `Rules:\n` +
           `- Do not tell the user to run CLI commands; emit ops and Dagain will execute them.\n` +
+          `- If any node is needs_human, prefer checkpoint.answer over control.resume alone.\n` +
           `- Always include data.rollup as an updated rolling summary (<= 800 chars). If Chat memory includes rolling_summary, update it.\n` +
           `- If unclear, ask one clarifying question in reply and ops=[].\n` +
           (memorySection ? `\n${memorySection}\n` : "\n") +
@@ -536,6 +623,18 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
           if (!type || type === "status") continue;
           if (type === "run.start") {
             requestedStart = true;
+            continue;
+          }
+
+          if (type === "checkpoint.answer") {
+            const nodeId = typeof op?.nodeId === "string" ? op.nodeId.trim() : "";
+            const answer = typeof op?.answer === "string" ? op.answer.trim() : "";
+            if (!answer) continue;
+            const args = ["answer", "--no-prompt", "--answer", answer];
+            if (nodeId) args.push("--node", nodeId);
+            const answered = await runCliCapture({ cwd: paths.rootDir, args });
+            if (answered.code !== 0) throw new Error(String(answered.stderr || answered.stdout || `answer failed (exit ${answered.code})`));
+            applied.push({ type, nodeId: nodeId || null });
             continue;
           }
 
@@ -572,7 +671,8 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
         }
 
         const hasControlOps = applied.some((a) => String(a?.type || "").startsWith("control."));
-        if (requestedStart || hasControlOps) {
+        const hasCheckpointOps = applied.some((a) => String(a?.type || "") === "checkpoint.answer");
+        if (requestedStart || hasControlOps || hasCheckpointOps) {
           const started = await startSupervisorDetached();
           applied.push({ type: "run.start", ...started });
         }

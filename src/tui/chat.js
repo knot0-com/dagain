@@ -50,7 +50,11 @@ function formatNodeLine(node) {
   const title = node?.title || "(untitled)";
   const type = node?.type || "(type?)";
   const status = node?.status || "(status?)";
-  return `${id} [${type}] (${status}) — ${title}`;
+  const q =
+    String(status || "").toLowerCase() === "needs_human" && node?.checkpoint?.question
+      ? ` — q: ${truncateText(node.checkpoint.question, 80)}`
+      : "";
+  return `${id} [${type}] (${status}) — ${title}${q}`;
 }
 
 function nowIso() {
@@ -333,20 +337,31 @@ export async function runChatTui(rootDir, flags) {
     }
 
     const lockRunId = typeof node?.lock?.runId === "string" ? node.lock.runId : "";
-    let stdoutRel = "";
+    let resultRel = "";
     if (lockRunId) {
-      const stdoutPathAbs = path.join(paths.runsDir, lockRunId, "stdout.log");
-      stdoutRel = path.relative(paths.rootDir, stdoutPathAbs);
+      const resultPathAbs = path.join(paths.runsDir, lockRunId, "result.json");
+      resultRel = path.relative(paths.rootDir, resultPathAbs);
     } else {
-      const stdoutRow = await kvGet({ dbPath: paths.dbPath, nodeId, key: "out.last_stdout_path" }).catch(() => null);
-      stdoutRel = typeof stdoutRow?.value_text === "string" ? stdoutRow.value_text.trim() : "";
+      const resultRow = await kvGet({ dbPath: paths.dbPath, nodeId, key: "out.last_result_path" }).catch(() => null);
+      resultRel = typeof resultRow?.value_text === "string" ? resultRow.value_text.trim() : "";
     }
-    const stdoutPathAbs = stdoutRel ? path.join(paths.rootDir, stdoutRel) : "";
-    const stdout = stdoutPathAbs ? await readTextTruncated(stdoutPathAbs, 10_000) : "";
-    const status = node.lock?.runId ? "running" : String(node.status || "open");
-    const meta = `${node.id} [${node.type || "?"}] (${status}) attempts=${node.attempts ?? 0}`;
-    const logLine = stdoutRel ? `log: ${stdoutRel}` : "log: (none)";
-    nodeLogBox.setContent(`${meta}\n${logLine}\n\n${stdout || "(empty)"}`);
+    const resultPathAbs = resultRel ? path.join(paths.rootDir, resultRel) : "";
+    const raw = resultPathAbs ? await readTextTruncated(resultPathAbs, 80_000) : "";
+    const parsed = safeJsonParse(raw);
+    const statusText = parsed?.status ? String(parsed.status) : node.lock?.runId ? "in_progress" : String(node.status || "open");
+    const summary = parsed?.summary ? String(parsed.summary) : "";
+    const checkpoint = parsed?.checkpoint && typeof parsed.checkpoint === "object" ? parsed.checkpoint : null;
+    const question = checkpoint?.question ? String(checkpoint.question) : "";
+    const meta = `${node.id} [${node.type || "?"}] (${statusText}) attempts=${node.attempts ?? 0}`;
+    const resultLine = resultRel ? `result: ${resultRel}` : "result: (none)";
+    const parts = [];
+    parts.push(meta);
+    parts.push(resultLine);
+    parts.push("");
+    if (summary) parts.push(`summary: ${summary}`);
+    if (question) parts.push(`question: ${question}`);
+    if (!summary && !question) parts.push("(empty)");
+    nodeLogBox.setContent(parts.join("\n"));
     nodeLogBox.setScrollPerc(100);
   }
 
@@ -509,6 +524,7 @@ export async function runChatTui(rootDir, flags) {
       `- {"type":"control.setWorkers","workers":3}\n` +
       `- {"type":"control.replan"}\n` +
       `- {"type":"control.cancel","nodeId":"task-001"}\n` +
+      `- {"type":"checkpoint.answer","nodeId":"task-002","answer":"..."}\n` +
       `- {"type":"node.add","id":"task-001","title":"...","nodeType":"task","parentId":"plan-000","status":"open","runner":null,"inputs":[{"nodeId":"task-000","key":"out.summary"}],"ownership":[{"resources":["__global__"],"mode":"read"}],"acceptance":["..."],"verify":["..."],"retryPolicy":{"maxAttempts":2},"dependsOn":["task-000"]}\n` +
       `- {"type":"node.update","id":"task-001","title":"...","runner":null,"inputs":[],"ownership":[],"acceptance":[],"verify":[],"retryPolicy":{"maxAttempts":2},"force":false}\n` +
       `- {"type":"node.setStatus","id":"task-001","status":"open|done|failed|needs_human","force":false}\n` +
@@ -519,6 +535,7 @@ export async function runChatTui(rootDir, flags) {
       `Rules:\n` +
       `- Do not tell the user to run CLI commands; emit ops and Dagain will execute them.\n` +
       `- Use control.* ops for supervisor controls (pause/resume/workers/replan/cancel).\n` +
+      `- If any node is needs_human, prefer checkpoint.answer over control.resume alone.\n` +
       `- Always include data.rollup as an updated rolling summary (<= 800 chars). If Chat memory includes rolling_summary, update it.\n` +
       `- Prefer ops for status checks and simple replanning.\n` +
       `- If unclear, ask one clarifying question in reply and ops=[].\n` +
@@ -549,6 +566,19 @@ export async function runChatTui(rootDir, flags) {
       const res = await runCliCapture({ cwd: rootDir, args: ["status"] });
       const text = String(res.stdout || res.stderr || "").trim();
       if (text) log(text);
+      return;
+    }
+
+    if (type === "checkpoint.answer") {
+      const nodeId = typeof op?.nodeId === "string" ? op.nodeId.trim() : "";
+      const answer = typeof op?.answer === "string" ? op.answer.trim() : "";
+      if (!answer) return;
+      const args = ["answer", "--no-prompt", "--answer", answer];
+      if (nodeId) args.push("--node", nodeId);
+      const res = await runCliCapture({ cwd: rootDir, args });
+      const text = String(res.stdout || res.stderr || "").trim();
+      if (text) log(text);
+      await startSupervisorDetached({ rootDir, log });
       return;
     }
 
@@ -657,6 +687,7 @@ export async function runChatTui(rootDir, flags) {
           "- /workers <n>",
           "- /replan",
           "- /cancel <nodeId>",
+          "- /answer [nodeId] <answer...>",
           "- /artifacts [nodeId]",
           "- /memory",
           "- /forget",
@@ -746,6 +777,38 @@ export async function runChatTui(rootDir, flags) {
       const parts = line.split(/\s+/).filter(Boolean);
       const nodeId = parts[1] || "";
       await enqueueControl({ rootDir, sub: "cancel", extraArgs: ["--node", nodeId], log });
+      return false;
+    }
+
+    if (line.startsWith("/answer")) {
+      const parts = line.split(/\s+/).filter(Boolean);
+      const rest = parts.slice(1);
+      if (rest.length === 0) {
+        log("Usage: /answer [nodeId] <answer...>");
+        return false;
+      }
+      const needsHumanIds = (Array.isArray(lastSnapshot?.nodes) ? lastSnapshot.nodes : [])
+        .filter((n) => String(n?.status || "").toLowerCase() === "needs_human")
+        .map((n) => String(n?.id || "").trim())
+        .filter(Boolean);
+
+      let nodeId = "";
+      let answerParts = rest;
+      if (answerParts.length >= 2 && needsHumanIds.includes(answerParts[0])) {
+        nodeId = answerParts[0];
+        answerParts = answerParts.slice(1);
+      }
+      const answer = answerParts.join(" ").trim();
+      if (!answer) {
+        log("Missing answer text.");
+        return false;
+      }
+      const args = ["answer", "--no-prompt", "--answer", answer];
+      if (nodeId) args.push("--node", nodeId);
+      const res = await runCliCapture({ cwd: rootDir, args });
+      const text = String(res.stdout || res.stderr || "").trim();
+      if (text) log(text);
+      await startSupervisorDetached({ rootDir, log });
       return false;
     }
 

@@ -1716,6 +1716,12 @@ async function runCommand(rootDir, flags) {
   const mailboxPollMsRaw = config.supervisor?.mailboxPollMs ?? 100;
   const mailboxPollMsNum = Number(mailboxPollMsRaw);
   const mailboxPollMs = Number.isFinite(mailboxPollMsNum) && mailboxPollMsNum >= 0 ? Math.floor(mailboxPollMsNum) : 100;
+  const needsHumanTimeoutMsRaw = config.supervisor?.needsHumanTimeoutMs ?? 30 * 60 * 1000;
+  const needsHumanTimeoutMsNum = Number(needsHumanTimeoutMsRaw);
+  const needsHumanTimeoutMs =
+    Number.isFinite(needsHumanTimeoutMsNum) && needsHumanTimeoutMsNum > 0 ? Math.floor(needsHumanTimeoutMsNum) : 30 * 60 * 1000;
+  const needsHumanTimeoutMinutes = Math.max(1, Math.round(needsHumanTimeoutMs / 60_000));
+  const needsHumanAutoAnswerText = `No human response after ${needsHumanTimeoutMinutes} minutes. Decide the safest default and proceed.`;
 
   async function reopenPlanForReplan() {
     const now = nowIso();
@@ -1742,6 +1748,76 @@ async function runCommand(rootDir, flags) {
     const rows = await sqliteQueryJson(paths.dbPath, "SELECT status FROM nodes WHERE id='plan-000' LIMIT 1;");
     const status = String(rows?.[0]?.status || "").toLowerCase();
     if (status === "done" || status === "failed") control.replanPaused = false;
+  }
+
+  async function autoAnswerNeedsHumanTimeoutDb() {
+    const now = nowIso();
+    const rows = await sqliteQueryJson(paths.dbPath, "SELECT id, checkpoint_json FROM nodes WHERE status='needs_human' ORDER BY id;");
+    if (rows.length === 0) return false;
+
+    const progressPath = path.join(paths.memoryDir, "progress.md");
+    const touched = [];
+    for (const row of rows) {
+      const nodeId = typeof row?.id === "string" ? row.id.trim() : "";
+      if (!nodeId) continue;
+      const existing = safeJsonParse(String(row?.checkpoint_json || ""));
+      const checkpointMeta = existing && typeof existing === "object" ? { ...existing } : {};
+      const checkpointIdRaw = typeof checkpointMeta.id === "string" ? checkpointMeta.id.trim() : "";
+      const checkpointId = checkpointIdRaw || `auto-${sanitizeNodeIdPart(nodeId).slice(0, 32)}-${runId()}`;
+
+      const responsePathAbs = path.join(paths.checkpointsDir, `response-${checkpointId}.json`);
+      await writeJsonAtomic(responsePathAbs, {
+        version: 1,
+        checkpointId,
+        nodeId,
+        answeredAt: now,
+        answer: needsHumanAutoAnswerText,
+        reason: "timeout",
+      });
+      const responsePathRel = path.relative(paths.rootDir, responsePathAbs);
+
+      checkpointMeta.version = 1;
+      checkpointMeta.answeredAt = now;
+      checkpointMeta.answer = needsHumanAutoAnswerText;
+      checkpointMeta.responsePath = responsePathRel;
+      if (!checkpointMeta.question) checkpointMeta.question = "";
+
+      await sqliteExec(
+        paths.dbPath,
+        `UPDATE nodes\n` +
+          `SET status='open',\n` +
+          `    checkpoint_json=${sqlQuote(JSON.stringify(checkpointMeta))},\n` +
+          `    lock_run_id=NULL,\n` +
+          `    lock_started_at=NULL,\n` +
+          `    lock_pid=NULL,\n` +
+          `    lock_host=NULL,\n` +
+          `    updated_at=${sqlQuote(now)}\n` +
+          `WHERE id=${sqlQuote(nodeId)};\n`,
+      );
+
+      touched.push({ nodeId, question: String(checkpointMeta.question || "").trim(), responsePathRel });
+
+      const lines = [];
+      lines.push("");
+      lines.push(`## [${now}] Auto-answered checkpoint for ${nodeId}`);
+      if (checkpointMeta.question) lines.push(`- question: ${String(checkpointMeta.question)}`);
+      lines.push(`- answer: ${needsHumanAutoAnswerText}`);
+      lines.push(`- response: ${responsePathRel}`);
+      await writeFile(progressPath, lines.join("\n") + "\n", { encoding: "utf8", flag: "a" });
+    }
+
+    const refreshed = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
+    await syncTaskPlan({ paths, graph: refreshed });
+
+    for (const t of touched) {
+      try {
+        const msg = `System: auto-answered checkpoint for ${t.nodeId}${t.question ? ` — ${t.question}` : ""}.`;
+        await appendRunChatTurnDb({ paths, runId: "__supervisor__", reply: msg });
+      } catch {
+        // ignore
+      }
+    }
+    return touched.length > 0;
   }
 
   async function selectRunnablePlannerCandidatesDb({ dbPath, nowIso, limit = 50 }) {
@@ -1851,6 +1927,7 @@ async function runCommand(rootDir, flags) {
   let lastIdleReason = "";
   let lastHeartbeatMs = 0;
   let lastCountsSig = "";
+  let needsHumanSinceMs = 0;
   // eslint-disable-next-line no-constant-condition
   try {
     async function runParallelSupervisor() {
@@ -2077,7 +2154,9 @@ async function runCommand(rootDir, flags) {
 
         if (idleReason !== lastIdleReason) {
           lastIdleReason = idleReason;
+          if (idleReason !== "needs_human") needsHumanSinceMs = 0;
           if (idleReason === "needs_human") {
+            if (!needsHumanSinceMs) needsHumanSinceMs = Date.now();
             ui.event(
               "checkpoint",
               canPrompt && !noPrompt
@@ -2101,6 +2180,18 @@ async function runCommand(rootDir, flags) {
           }
           if (answered) continue;
           return;
+        }
+        if (idleReason === "needs_human" && (noPrompt || !canPrompt)) {
+          if (!needsHumanSinceMs) needsHumanSinceMs = Date.now();
+          if (Date.now() - needsHumanSinceMs >= needsHumanTimeoutMs) {
+            const did = await serial.enqueue(autoAnswerNeedsHumanTimeoutDb);
+            needsHumanSinceMs = 0;
+            if (did) {
+              lastIdleReason = "";
+              ui.event("warn", `Auto-answered checkpoint(s) after ${needsHumanTimeoutMinutes}m timeout. Continuing...`);
+              continue;
+            }
+          }
         }
 
         if (idleReason === "blocked_failed") {
@@ -2306,7 +2397,9 @@ async function runCommand(rootDir, flags) {
 
         if (idleReason !== lastIdleReason) {
           lastIdleReason = idleReason;
+          if (idleReason !== "needs_human") needsHumanSinceMs = 0;
           if (idleReason === "needs_human") {
+            if (!needsHumanSinceMs) needsHumanSinceMs = Date.now();
             ui.event(
               "checkpoint",
               canPrompt && !noPrompt
@@ -2330,6 +2423,18 @@ async function runCommand(rootDir, flags) {
           }
           if (answered) continue;
           return;
+        }
+        if (idleReason === "needs_human" && (noPrompt || !canPrompt)) {
+          if (!needsHumanSinceMs) needsHumanSinceMs = Date.now();
+          if (Date.now() - needsHumanSinceMs >= needsHumanTimeoutMs) {
+            const did = await serial.enqueue(autoAnswerNeedsHumanTimeoutDb);
+            needsHumanSinceMs = 0;
+            if (did) {
+              lastIdleReason = "";
+              ui.event("warn", `Auto-answered checkpoint(s) after ${needsHumanTimeoutMinutes}m timeout. Continuing...`);
+              continue;
+            }
+          }
         }
 
         if (idleReason === "blocked_failed") {
@@ -3070,6 +3175,12 @@ async function executeNode({
     result = { ...result, checkpoint: checkpointMeta };
     consoleUi.event("checkpoint", `${node.id}${question ? ` — ${consoleUi.truncate(question, 160)}` : ""}`);
     consoleUi.detail(`checkpoint: ${checkpointOutPath}`);
+    try {
+      const msg = `System: node ${node.id} is waiting for human input${question ? ` — ${question}` : ""}.`;
+      await appendRunChatTurnDb({ paths, runId: run, reply: msg });
+    } catch {
+      // ignore
+    }
   }
 
   const finalStatus = String(result?.status || "").toLowerCase();
@@ -5305,6 +5416,27 @@ async function syncTaskPlan({ paths, graph }) {
   }
 
   await writeFile(taskPlanPath, out.endsWith("\n") ? out : out + "\n", "utf8");
+}
+
+async function appendRunChatTurnDb({ paths, runId, reply, ops = [] }) {
+  const dbPath = paths?.dbPath;
+  if (!dbPath) return;
+  const nodeId = "__run__";
+  const now = nowIso();
+  const replyText = String(reply || "").trim();
+  if (!replyText) return;
+  const opsList = Array.isArray(ops) ? ops.map((o) => String(o)) : [];
+
+  const existingRow = await kvGet({ dbPath, nodeId, key: "chat.turns" }).catch(() => null);
+  const existingText = typeof existingRow?.value_text === "string" ? existingRow.value_text.trim() : "";
+  const parsed = safeJsonParse(existingText);
+  const turns = Array.isArray(parsed) ? parsed : [];
+  turns.push({ at: now, user: "", reply: replyText, ops: opsList });
+  const kept = turns.slice(Math.max(0, turns.length - 30));
+
+  const valueText = JSON.stringify(kept);
+  await kvPut({ dbPath, nodeId, key: "chat.turns", valueText, runId: String(runId || ""), attempt: 0, nowIso: now });
+  await kvPut({ dbPath, nodeId, key: "chat.summary", valueText: replyText, runId: String(runId || ""), attempt: 0, nowIso: now });
 }
 
 async function appendProgress({ paths, node, run, role, runnerName, result, stdoutPath }) {
