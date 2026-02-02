@@ -15,6 +15,7 @@ import { loadDashboardSnapshot } from "../lib/dashboard.js";
 import { kvGet, kvPut } from "../lib/db/kv.js";
 import { readSupervisorLock } from "../lib/lock.js";
 import { serveDashboard } from "../ui/server.js";
+import { executeContextOps, formatContextOpsResults, isContextOp } from "../lib/context-ops.js";
 
 function truncateText(value, maxLen) {
   const s = String(value || "");
@@ -481,6 +482,10 @@ export async function runChatTui(rootDir, flags) {
 
     const activityPath = path.join(paths.memoryDir, "activity.log");
     const recent = await readTextTruncated(activityPath, 4_000);
+    const goalText = await readTextTruncated(paths.goalPath, 8_000);
+    const taskPlanText = await readTextTruncated(path.join(paths.memoryDir, "task_plan.md"), 8_000);
+    const findingsText = await readTextTruncated(path.join(paths.memoryDir, "findings.md"), 8_000);
+    const progressText = await readTextTruncated(path.join(paths.memoryDir, "progress.md"), 8_000);
 
     const chatNodeId = "__run__";
     const chatRollupRow = await kvGet({ dbPath: paths.dbPath, nodeId: chatNodeId, key: "chat.rollup" }).catch(() => null);
@@ -514,7 +519,7 @@ export async function runChatTui(rootDir, flags) {
       memorySection = lines.join("\n");
     }
 
-    const prompt =
+    const promptPrefix =
       `You are Dagain Chat Router.\n` +
       `Return JSON in <result> with {status, summary, data:{reply, ops, rollup}}.\n` +
       `Allowed ops:\n` +
@@ -525,6 +530,10 @@ export async function runChatTui(rootDir, flags) {
       `- {"type":"control.replan"}\n` +
       `- {"type":"control.cancel","nodeId":"task-001"}\n` +
       `- {"type":"checkpoint.answer","nodeId":"task-002","answer":"..."}\n` +
+      `- {"type":"ctx.readFile","path":"README.md","maxBytes":8000}\n` +
+      `- {"type":"ctx.rg","pattern":"needs_human","glob":"src/**","maxMatches":50}\n` +
+      `- {"type":"ctx.gitStatus"}\n` +
+      `- {"type":"ctx.gitDiffStat"}\n` +
       `- {"type":"node.add","id":"task-001","title":"...","nodeType":"task","parentId":"plan-000","status":"open","runner":null,"inputs":[{"nodeId":"task-000","key":"out.summary"}],"ownership":[{"resources":["__global__"],"mode":"read"}],"acceptance":["..."],"verify":["..."],"retryPolicy":{"maxAttempts":2},"dependsOn":["task-000"]}\n` +
       `- {"type":"node.update","id":"task-001","title":"...","runner":null,"inputs":[],"ownership":[],"acceptance":[],"verify":[],"retryPolicy":{"maxAttempts":2},"force":false}\n` +
       `- {"type":"node.setStatus","id":"task-001","status":"open|done|failed|needs_human","force":false}\n` +
@@ -536,25 +545,48 @@ export async function runChatTui(rootDir, flags) {
       `- Do not tell the user to run CLI commands; emit ops and Dagain will execute them.\n` +
       `- Use control.* ops for supervisor controls (pause/resume/workers/replan/cancel).\n` +
       `- If any node is needs_human, prefer checkpoint.answer over control.resume alone.\n` +
+      `- Use ctx.* ops to request additional read-only context (Dagain will execute and re-call you with results).\n` +
       `- Always include data.rollup as an updated rolling summary (<= 800 chars). If Chat memory includes rolling_summary, update it.\n` +
       `- Prefer ops for status checks and simple replanning.\n` +
       `- If unclear, ask one clarifying question in reply and ops=[].\n` +
       (memorySection ? `\n${memorySection}\n` : "\n") +
+      (goalText ? `\nGOAL.md:\n${goalText}\n` : "") +
+      (taskPlanText ? `\nTask plan (.dagain/memory/task_plan.md):\n${taskPlanText}\n` : "") +
+      (findingsText ? `\nFindings (.dagain/memory/findings.md):\n${findingsText}\n` : "") +
+      (progressText ? `\nProgress (.dagain/memory/progress.md):\n${progressText}\n` : "") +
       `\n` +
       `State counts: ${JSON.stringify(counts)}\n` +
       `Next runnable: ${next ? formatNodeLine(next) : "(none)"}\n` +
       `Nodes (first 40):\n${nodeLines}\n` +
       (recent ? `\nRecent activity (tail):\n${recent}\n` : "") +
-      `\nUser: ${line}\n`;
+      `\n`;
 
-    const args = ["microcall", "--prompt", prompt, "--role", roleOverride];
-    if (runnerOverride) args.push("--runner", runnerOverride);
+    let parsed = null;
+    const ctxBlocks = [];
+    let ctxResultsText = "";
+    for (let round = 0; round < 3; round += 1) {
+      const prompt = `${promptPrefix}${ctxResultsText ? `${ctxResultsText}\n\n` : ""}User: ${line}\n`;
+      const args = ["microcall", "--prompt", prompt, "--role", roleOverride];
+      if (runnerOverride) args.push("--runner", runnerOverride);
 
-    const res = await runCliCapture({ cwd: rootDir, args });
-    if (res.code !== 0) throw new Error(String(res.stderr || res.stdout || `microcall failed (exit ${res.code})`));
-    const parsed = safeJsonParse(String(res.stdout || ""));
-    if (!parsed) throw new Error("Router returned invalid JSON.");
+      const res = await runCliCapture({ cwd: rootDir, args });
+      if (res.code !== 0) throw new Error(String(res.stderr || res.stdout || `microcall failed (exit ${res.code})`));
+      parsed = safeJsonParse(String(res.stdout || ""));
+      if (!parsed) throw new Error("Router returned invalid JSON.");
 
+      const dataRound = parsed?.data && typeof parsed.data === "object" ? parsed.data : null;
+      const opsRound = Array.isArray(dataRound?.ops) ? dataRound.ops : [];
+      const ctxOps = opsRound.filter((o) => isContextOp(o));
+      if (ctxOps.length === 0) break;
+      const results = await executeContextOps({ rootDir, ops: ctxOps });
+      const formatted = formatContextOpsResults(results);
+      if (!formatted) break;
+      ctxBlocks.push(formatted);
+      ctxResultsText = ctxBlocks.join("\n\n");
+    }
+
+    const dataFinal = parsed?.data && typeof parsed.data === "object" ? parsed.data : null;
+    if (dataFinal && Array.isArray(dataFinal.ops)) dataFinal.ops = dataFinal.ops.filter((o) => !isContextOp(o));
     return { parsed, chatTurns };
   }
 

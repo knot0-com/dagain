@@ -15,6 +15,7 @@ import { kvGet, kvPut } from "../lib/db/kv.js";
 import { mailboxEnqueue } from "../lib/db/mailbox.js";
 import { ensureMailboxTable } from "../lib/db/migrate.js";
 import { loadConfig, saveConfig, defaultConfig } from "../lib/config.js";
+import { executeContextOps, formatContextOpsResults, isContextOp } from "../lib/context-ops.js";
 import { readSupervisorLock } from "../lib/lock.js";
 
 function json(res, status, body) {
@@ -245,42 +246,30 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
     const existing = await readRunningSupervisorLock();
     if (existing?.pid) return { alreadyRunning: true, pid: Number(existing.pid) || 0, message: "Supervisor already running." };
 
-    // Spawn with piped output so we can detect early failures.
+    // Spawn fully detached (no stdout/stderr pipes). Piped/destroyed stdio can cause the supervisor
+    // to terminate later due to EPIPE when it writes logs.
     const child = spawn(process.execPath, [dagainBinPath(), "run", "--no-live", "--no-color", "--no-prompt"], {
       cwd: paths.rootDir,
       env: { ...process.env, NO_COLOR: "1" },
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "ignore", "ignore"],
       detached: true,
     });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (d) => {
-      stdout += d;
-    });
-    child.stderr.on("data", (d) => {
-      stderr += d;
-    });
-
-    // Wait briefly to see if the process starts or dies immediately.
-    const earlyExit = await new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        child.stdout.destroy();
-        child.stderr.destroy();
-        child.unref?.();
-        resolve(null);
-      }, 2000);
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        resolve(code);
-      });
-    });
-    if (earlyExit !== null && earlyExit !== 0) {
-      const errMsg = (stderr || stdout || "").trim().split("\n").pop() || `Process exited with code ${earlyExit}`;
-      throw new Error(errMsg);
-    }
     const pid = child.pid || 0;
+    let exited = null;
+    child.on("exit", (code) => {
+      exited = code ?? 0;
+    });
+    child.unref?.();
+
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      if (exited !== null && exited !== 0) throw new Error(`Supervisor exited with code ${exited}.`);
+      const lock = await readRunningSupervisorLock();
+      if (lock?.pid && Number(lock.pid) === pid) return { alreadyRunning: false, pid, message: `Started supervisor pid=${pid}.` };
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
     return { alreadyRunning: false, pid, message: `Started supervisor pid=${pid}.` };
   }
 
@@ -493,6 +482,10 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
           .join("\n");
 
         const recent = await readTailText(path.join(paths.memoryDir, "activity.log"), 4_000);
+        const goalText = await readTailText(paths.goalPath, 8_000);
+        const taskPlanText = await readTailText(path.join(paths.memoryDir, "task_plan.md"), 8_000);
+        const findingsText = await readTailText(path.join(paths.memoryDir, "findings.md"), 8_000);
+        const progressText = await readTailText(path.join(paths.memoryDir, "progress.md"), 8_000);
 
         const chatNodeId = "__run__";
         const [chatRollupRow, chatSummaryRow, chatLastOpsRow, chatTurnsRow] = await Promise.all([
@@ -578,7 +571,7 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
           memorySection = lines.join("\n");
         }
 
-        const prompt =
+        const promptPrefix =
           `You are Dagain Chat Router.\n` +
           `Return JSON in <result> with {status, summary, data:{reply, ops, rollup}}.\n` +
           `Allowed ops:\n` +
@@ -590,31 +583,60 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
           `- {"type":"control.replan"}\n` +
           `- {"type":"control.cancel","nodeId":"task-001"}\n` +
           `- {"type":"checkpoint.answer","nodeId":"task-002","answer":"..."}\n` +
+          `- {"type":"ctx.readFile","path":"README.md","maxBytes":8000}\n` +
+          `- {"type":"ctx.rg","pattern":"needs_human","glob":"src/**","maxMatches":50}\n` +
+          `- {"type":"ctx.gitStatus"}\n` +
+          `- {"type":"ctx.gitDiffStat"}\n` +
           `Rules:\n` +
           `- Do not tell the user to run CLI commands; emit ops and Dagain will execute them.\n` +
           `- If any node is needs_human, prefer checkpoint.answer over control.resume alone.\n` +
+          `- Use ctx.* ops to request additional read-only context (Dagain will execute and re-call you with results).\n` +
           `- Always include data.rollup as an updated rolling summary (<= 800 chars). If Chat memory includes rolling_summary, update it.\n` +
           `- If unclear, ask one clarifying question in reply and ops=[].\n` +
           (memorySection ? `\n${memorySection}\n` : "\n") +
+          (goalText ? `\nGOAL.md:\n${goalText}\n` : "") +
+          (taskPlanText ? `\nTask plan (.dagain/memory/task_plan.md):\n${taskPlanText}\n` : "") +
+          (findingsText ? `\nFindings (.dagain/memory/findings.md):\n${findingsText}\n` : "") +
+          (progressText ? `\nProgress (.dagain/memory/progress.md):\n${progressText}\n` : "") +
           `\n` +
           `State counts: ${JSON.stringify(counts)}\n` +
           `Next runnable: ${next ? formatNodeLine(next) : "(none)"}\n` +
           `Supervisor: ${snapshot?.supervisor?.pid ? `pid=${snapshot.supervisor.pid} host=${snapshot.supervisor.host || "?"}` : "(none)"}\n` +
           `Nodes (first 40):\n${nodeLines}\n` +
-          (recent ? `\nRecent activity (tail):\n${recent}\n` : "") +
-          `\nUser: ${message}\n`;
+          (recent ? `\nRecent activity (tail):\n${recent}\n` : "");
 
-        const args = ["microcall", "--prompt", prompt, "--role", role];
-        if (runnerOverride) args.push("--runner", runnerOverride);
-        const micro = await runCliCapture({ cwd: paths.rootDir, args });
-        if (micro.code !== 0) throw new Error(String(micro.stderr || micro.stdout || `microcall failed (exit ${micro.code})`));
-        const parsed = safeJsonParse(String(micro.stdout || ""), null);
-        if (!parsed) throw new Error("Chat router returned invalid JSON.");
+        let parsed = null;
+        let reply = "";
+        let rollupNext = "";
+        let ops = [];
 
-        const data = parsed?.data && typeof parsed.data === "object" ? parsed.data : null;
-        const reply = typeof data?.reply === "string" ? data.reply.trim() : "";
-        const rollupNext = typeof data?.rollup === "string" ? data.rollup.trim() : "";
-        const ops = Array.isArray(data?.ops) ? data.ops : [];
+        const ctxBlocks = [];
+        let ctxResultsText = "";
+        for (let round = 0; round < 3; round += 1) {
+          const prompt = `${promptPrefix}${ctxResultsText ? `\n${ctxResultsText}\n` : "\n"}User: ${message}\n`;
+          const args = ["microcall", "--prompt", prompt, "--role", role];
+          if (runnerOverride) args.push("--runner", runnerOverride);
+          const micro = await runCliCapture({ cwd: paths.rootDir, args });
+          if (micro.code !== 0) throw new Error(String(micro.stderr || micro.stdout || `microcall failed (exit ${micro.code})`));
+          parsed = safeJsonParse(String(micro.stdout || ""), null);
+          if (!parsed) throw new Error("Chat router returned invalid JSON.");
+
+          const dataRound = parsed?.data && typeof parsed.data === "object" ? parsed.data : null;
+          reply = typeof dataRound?.reply === "string" ? dataRound.reply.trim() : "";
+          rollupNext = typeof dataRound?.rollup === "string" ? dataRound.rollup.trim() : "";
+          ops = Array.isArray(dataRound?.ops) ? dataRound.ops : [];
+
+          const ctxOps = ops.filter((o) => isContextOp(o));
+          if (ctxOps.length === 0) break;
+          const results = await executeContextOps({ rootDir: paths.rootDir, ops: ctxOps });
+          const formatted = formatContextOpsResults(results);
+          if (!formatted) break;
+          ctxBlocks.push(formatted);
+          ctxResultsText = ctxBlocks.join("\n\n");
+        }
+
+        // ctx.* ops are internal prompt-enrichment ops; never apply them to the supervisor.
+        ops = ops.filter((o) => !isContextOp(o));
 
         const applied = [];
         let requestedStart = false;

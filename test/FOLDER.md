@@ -23,6 +23,7 @@ It covers CLI behavior, DB migrations, scheduling logic, and integrations.
 | `auto-kv-envelope.test.js` | test | Auto KV envelope behavior |
 | `cancel.test.js` | test | Cancel behavior and propagation |
 | `chat-controls.test.js` | test | Chat → mailbox control ops |
+| `chat-context-ops.test.js` | test | Chat executes allowlisted ctx.* ops and re-calls microcall with results |
 | `chat-default-planner-runner.test.js` | test | Chat defaults: planner runner selection |
 | `chat-default-tty-guard.test.js` | test | Chat non-TTY guardrails |
 | `chat-graph-ops.test.js` | test | Chat graph operations (node/dep ops) |
@@ -32,6 +33,7 @@ It covers CLI behavior, DB migrations, scheduling logic, and integrations.
 | `chat-repl.test.js` | test | Plain chat REPL behavior |
 | `chat-rollup.test.js` | test | Chat rollup summary behavior |
 | `chat-router-controls.test.js` | test | Router control ops behavior |
+| `chat-context-prompt.test.js` | test | Chat prompt includes GOAL + memory docs |
 | `claim-node.test.js` | test | Node claiming/locking in DB |
 | `control-cli.test.js` | test | `dagain control` CLI |
 | `dashboard-snapshot.test.js` | test | Dashboard snapshot shape |

@@ -73,6 +73,7 @@ Inside `dagain chat` (both TUI and `--plain`):
 - `/workers <n>` — set concurrency (default: 3)
 - `/replan` — force plan node (`plan-000`) to reopen and block launches until it completes
 - `/cancel <nodeId>` — cancel a running node (best-effort)
+- `/answer [nodeId] <answer...>` — answer a checkpoint and reopen a `needs_human` node
 - `/artifacts [nodeId]` — show run artifact paths (and last stdout/result for a node)
 - `/memory` / `/forget` — inspect/reset chat memory stored in SQLite KV
 
@@ -115,6 +116,7 @@ Dagain keeps the model from directly mutating state by having it emit **ops**. T
 In `dagain chat`, the router can emit:
 
 - `control.*` ops (pause/resume/workers/replan/cancel)
+- `ctx.*` ops (read-only context requests like `ctx.readFile`, `ctx.rg`, `ctx.gitStatus`) — Dagain executes these and re-invokes the router with results
 - `node.add`, `node.update`, `node.setStatus`
 - `dep.add`, `dep.remove`
 - `run.start`, `run.stop`, `status`

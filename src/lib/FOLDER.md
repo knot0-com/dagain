@@ -19,6 +19,7 @@ It owns config/state IO, SQLite DB helpers, and workgraph scheduling.
 | `args.js` | runtime | CLI argument parsing utilities |
 | `config.js` | runtime | Config + path helpers for `.dagain/` (default workers, runner defaults) |
 | `crypto.js` | runtime | File hashing helpers |
+| `context-ops.js` | runtime | Allowlisted read-only ctx.* ops for chat prompt enrichment |
 | `dashboard.js` | runtime | Snapshot builder for dashboards (counts/nodes/next) |
 | `db/` | runtime | SQLite access + schema helpers |
 | `fs.js` | runtime | File/dir utilities (atomic writes, etc.) |
