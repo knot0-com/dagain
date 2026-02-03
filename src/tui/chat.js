@@ -9,13 +9,14 @@ import { spawn } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import { dagainPaths, loadConfig } from "../lib/config.js";
+import { dagainPaths, dagainSessionPaths, loadConfig } from "../lib/config.js";
 import { pathExists } from "../lib/fs.js";
 import { loadDashboardSnapshot } from "../lib/dashboard.js";
 import { kvGet, kvPut } from "../lib/db/kv.js";
 import { readSupervisorLock } from "../lib/lock.js";
 import { serveDashboard } from "../ui/server.js";
 import { executeContextOps, formatContextOpsResults, isContextOp } from "../lib/context-ops.js";
+import { ensureSessionLayout } from "../lib/sessions.js";
 
 function truncateText(value, maxLen) {
   const s = String(value || "");
@@ -87,7 +88,8 @@ function runCliCapture({ cwd, args }) {
 }
 
 async function startSupervisorDetached({ rootDir, log }) {
-  const paths = dagainPaths(rootDir);
+  const sessionId = await ensureSessionLayout(rootDir);
+  const paths = dagainSessionPaths(rootDir, sessionId);
   const lock = await readSupervisorLock(paths.lockPath).catch(() => null);
   const pid = Number(lock?.pid);
   const host = String(lock?.host || "").trim();
@@ -134,9 +136,10 @@ export async function runChatTui(rootDir, flags) {
     throw new Error("TUI requires a TTY (interactive terminal). Use `dagain chat --plain` instead.");
   }
 
-  const paths = dagainPaths(rootDir);
-  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
-  const config = await loadConfig(paths.configPath);
+  const sessionId = await ensureSessionLayout(rootDir);
+  const paths = dagainSessionPaths(rootDir, sessionId);
+  if (!(await pathExists(paths.dbPath))) throw new Error("Missing session state.sqlite. Run `dagain init`.");
+  const config = await loadConfig(dagainPaths(rootDir).configPath);
   if (!config) throw new Error("Missing .dagain/config.json. Run `dagain init`.");
 
   const noLlm = Boolean(flags["no-llm"]) || Boolean(flags.noLlm);

@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "./lib/args.js";
 import { sha256File } from "./lib/crypto.js";
 import { appendLine, ensureDir, pathExists, readJson, writeJsonAtomic } from "./lib/fs.js";
-import { dagainPaths, defaultConfig, loadConfig, saveConfig } from "./lib/config.js";
+import { dagainPaths, dagainSessionPaths, defaultConfig, loadConfig, saveConfig } from "./lib/config.js";
 import { defaultWorkgraph, loadWorkgraph, saveWorkgraph, countByStatus } from "./lib/workgraph.js";
 import { selectNextNode } from "./lib/select.js";
 import { formatBullets, renderTemplate } from "./lib/template.js";
@@ -28,6 +28,7 @@ import { exportWorkgraphJson, loadWorkgraphFromDb } from "./lib/db/export.js";
 import { mailboxAck, mailboxClaimNext, mailboxEnqueue } from "./lib/db/mailbox.js";
 import { kvGet, kvList, kvPut } from "./lib/db/kv.js";
 import { ensureDepsRequiredStatusColumn, ensureMailboxTable } from "./lib/db/migrate.js";
+import { createNewSession, ensureSessionLayout, isSessionActive, readCurrentSessionId, sessionHasState } from "./lib/sessions.js";
 import {
   allDoneDb,
   applyResult as applyResultDb,
@@ -65,6 +66,30 @@ function normalizePromoteAfterAttempts(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0) return 0;
   return Math.floor(n);
+}
+
+async function resolveSessionPaths(rootDir) {
+  const sessionId = await ensureSessionLayout(rootDir);
+  return dagainSessionPaths(rootDir, sessionId);
+}
+
+async function resolveChatSessionPaths(rootDir, flags) {
+  const reuse = Boolean(flags.reuse);
+  const newSessionFlag = Boolean(flags["new-session"]) || Boolean(flags.newSession);
+  const ensuredSessionId = await ensureSessionLayout(rootDir);
+  if (newSessionFlag) {
+    const id = await createNewSession(rootDir);
+    return dagainSessionPaths(rootDir, id);
+  }
+  if (!reuse) {
+    const hasState = await sessionHasState({ rootDir, sessionId: ensuredSessionId });
+    const active = hasState ? await isSessionActive({ rootDir, sessionId: ensuredSessionId }) : false;
+    if (hasState && !active) {
+      const id = await createNewSession(rootDir);
+      return dagainSessionPaths(rootDir, id);
+    }
+  }
+  return dagainSessionPaths(rootDir, ensuredSessionId);
 }
 
 async function resolveRunnerNameFromPool({ dbPath, role, seed, attempts, config }) {
@@ -329,13 +354,13 @@ function dagainRunnerEnv(paths, { nodeId, runId, parentNodeId = "", runMode = ""
   const shellMerge = fileURLToPath(new URL("../scripts/shell-merge.js", import.meta.url));
   const mode = String(runMode || "").trim();
   const base = {
-    DAGAIN_DB: paths.dbPath,
+    DAGAIN_DB: path.join(paths.stateDir, "state.sqlite"),
     DAGAIN_NODE_ID: nodeId,
     DAGAIN_RUN_ID: runId,
     DAGAIN_PARENT_NODE_ID: parentNodeId,
-    DAGAIN_ARTIFACTS_DIR: paths.artifactsDir,
-    DAGAIN_CHECKPOINTS_DIR: paths.checkpointsDir,
-    DAGAIN_RUNS_DIR: paths.runsDir,
+    DAGAIN_ARTIFACTS_DIR: path.join(paths.stateDir, "artifacts"),
+    DAGAIN_CHECKPOINTS_DIR: path.join(paths.stateDir, "checkpoints"),
+    DAGAIN_RUNS_DIR: path.join(paths.stateDir, "runs"),
     DAGAIN_BIN: dagainBin,
     DAGAIN_SHELL_VERIFIER: shellVerifier,
     DAGAIN_SHELL_MERGE: shellMerge,
@@ -800,8 +825,10 @@ async function copyTemplates(rootDir, { force = false } = {}) {
 }
 
 async function initCommand(rootDir, flags) {
-  const paths = dagainPaths(rootDir);
+  const globalPaths = dagainPaths(rootDir);
   const force = Boolean(flags.force);
+  const reuse = Boolean(flags.reuse) || force;
+  const newSessionFlag = Boolean(flags["new-session"]) || Boolean(flags.newSession);
   const noTemplates = Boolean(flags["no-templates"]);
   const noRefine = Boolean(flags["no-refine"]) || Boolean(flags.noRefine);
   const goalFlag = typeof flags.goal === "string" ? flags.goal : "";
@@ -812,15 +839,36 @@ async function initCommand(rootDir, flags) {
   const noColor = resolveNoColorFlag(flags);
   const forceColor = resolveForceColorFlag(flags);
 
-  await ensureDir(paths.stateDir);
+  const ensuredSessionId = await ensureSessionLayout(rootDir);
+  let sessionId = ensuredSessionId;
+  if (newSessionFlag && reuse) {
+    throw new Error("`dagain init`: `--new-session` and `--reuse` cannot be combined.");
+  }
+  if (newSessionFlag) {
+    sessionId = await createNewSession(rootDir);
+  } else if (goalFlag && !reuse) {
+    const hasState = await sessionHasState({ rootDir, sessionId: ensuredSessionId });
+    if (hasState) {
+      const active = await isSessionActive({ rootDir, sessionId: ensuredSessionId });
+      if (active) {
+        throw new Error("Current session is active. Use `--reuse` to edit it, or `--new-session` to start fresh.");
+      }
+      sessionId = await createNewSession(rootDir);
+    }
+  }
+
+  const paths = dagainSessionPaths(rootDir, sessionId);
+
+  await ensureDir(globalPaths.stateDir);
+  await ensureDir(globalPaths.sessionsDir);
+  await ensureDir(globalPaths.templatesDir);
+  await ensureDir(paths.sessionDir);
   await ensureDir(paths.checkpointsDir);
   await ensureDir(paths.runsDir);
   await ensureDir(paths.memoryDir);
-  await ensureDir(paths.templatesDir);
   await ensureDir(paths.tmpDir);
   await ensureDir(paths.artifactsDir);
 
-  const goalExists = await pathExists(paths.goalPath);
   if (goalFlag) {
     await writeFile(
       paths.goalPath,
@@ -839,7 +887,7 @@ async function initCommand(rootDir, flags) {
 
   const goalHash = await sha256File(paths.goalPath);
 
-  let config = await loadConfig(paths.configPath);
+  let config = await loadConfig(globalPaths.configPath);
   if (!config || force) config = defaultConfig();
   const roleFlagMap = {
     main: "main",
@@ -863,8 +911,8 @@ async function initCommand(rootDir, flags) {
       touchedConfig = true;
     }
   }
-  if (touchedConfig || !(await pathExists(paths.configPath))) {
-    await saveConfig(paths.configPath, config);
+  if (touchedConfig || !(await pathExists(globalPaths.configPath))) {
+    await saveConfig(globalPaths.configPath, config);
   }
 
   if (force) {
@@ -933,7 +981,7 @@ async function initCommand(rootDir, flags) {
   }
 
   await repairDagainStateOwnership({ paths });
-  process.stdout.write(`Initialized dagain state in ${paths.stateDir}\n`);
+  process.stdout.write(`Initialized dagain session ${paths.sessionId} in ${paths.sessionDir}\n`);
 
   if (goalFlag && !noRefine) {
     if (!config) throw new Error("Missing .dagain/config.json after init");
@@ -951,8 +999,9 @@ async function initCommand(rootDir, flags) {
 }
 
 async function goalCommand(rootDir, flags) {
-  const paths = dagainPaths(rootDir);
-  const config = await loadConfig(paths.configPath);
+  const globalPaths = dagainPaths(rootDir);
+  const paths = await resolveSessionPaths(rootDir);
+  const config = await loadConfig(globalPaths.configPath);
   if (!config) throw new Error("Missing .dagain/config.json. Run `dagain init` first.");
 
   const goalFlag = typeof flags.goal === "string" ? flags.goal : "";
@@ -971,7 +1020,7 @@ async function goalCommand(rootDir, flags) {
       "utf8",
     );
   } else if (!(await pathExists(paths.goalPath))) {
-    throw new Error("Missing GOAL.md. Provide `--goal \"...\"` or run `dagain init`.");
+    throw new Error("Missing session GOAL.md. Provide `--goal \"...\"` or run `dagain init`.");
   }
 
   await refineGoalInteractive({
@@ -988,14 +1037,15 @@ async function goalCommand(rootDir, flags) {
 }
 
 async function startCommand(rootDir, flags, positionalGoalTokens) {
-  const paths = dagainPaths(rootDir);
+  const globalPaths = dagainPaths(rootDir);
+  let paths = await resolveSessionPaths(rootDir);
   const live = resolveLiveFlag(flags);
   const noRefine = Boolean(flags["no-refine"]) || Boolean(flags.noRefine);
 
   const goalFlag = typeof flags.goal === "string" ? flags.goal.trim() : "";
   const positionalGoal = Array.isArray(positionalGoalTokens) ? positionalGoalTokens.join(" ").trim() : "";
 
-  const hadConfig = await pathExists(paths.configPath);
+  const hadConfig = await pathExists(globalPaths.configPath);
   const hadGoal = await pathExists(paths.goalPath);
 
   let seedGoal = goalFlag || positionalGoal;
@@ -1029,9 +1079,10 @@ async function startCommand(rootDir, flags, positionalGoalTokens) {
     "no-refine": true,
     noRefine: true,
   });
+  paths = await resolveSessionPaths(rootDir);
 
   // Optional first-run config prompt.
-  let config = await loadConfig(paths.configPath);
+  let config = await loadConfig(globalPaths.configPath);
   if (!config) throw new Error("Missing .dagain/config.json after init");
   if (!hadConfig && canPrompt) {
     const runnerNames = Object.keys(config.runners || {}).sort();
@@ -1400,10 +1451,10 @@ function formatNodeLine(node) {
 }
 
 async function statusCommand(rootDir) {
-  const paths = dagainPaths(rootDir);
+  const paths = await resolveSessionPaths(rootDir);
   const hasDb = Boolean(paths.dbPath && (await pathExists(paths.dbPath)));
   const graph = hasDb ? await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath }) : await loadWorkgraph(paths.graphPath);
-  if (!graph) throw new Error("Missing .dagain state. Run `dagain init`.");
+  if (!graph) throw new Error("Missing dagain session state. Run `dagain init`.");
 
   const counts = countByStatus(graph.nodes);
   process.stdout.write("Workgraph status\n");
@@ -1421,7 +1472,7 @@ async function statusCommand(rootDir) {
       const runId = typeof node?.lock?.runId === "string" ? node.lock.runId.trim() : "";
       process.stdout.write(`- ${node.id}${runId ? ` (run=${runId})` : ""}\n`);
       if (runId) {
-        const logAbs = path.join(paths.runsDir, runId, "stdout.log");
+        const logAbs = path.join(paths.stateDir, "runs", runId, "stdout.log");
         const logRel = path.relative(paths.rootDir, logAbs) || logAbs;
         process.stdout.write(`  log: ${logRel}\n`);
       }
@@ -1508,9 +1559,9 @@ function validateGraph(graph) {
 }
 
 async function graphValidateCommand(rootDir) {
-  const paths = dagainPaths(rootDir);
+  const paths = await resolveSessionPaths(rootDir);
   const graph = await loadWorkgraph(paths.graphPath);
-  if (!graph) throw new Error("Missing .dagain/workgraph.json. Run `dagain init`.");
+  if (!graph) throw new Error("Missing session workgraph.json. Run `dagain init`.");
   validateGraph(graph);
   process.stdout.write("workgraph.json OK\n");
 }
@@ -1575,10 +1626,11 @@ function diagnoseNoRunnableNodes(graph) {
 }
 
 async function runCommand(rootDir, flags) {
-  const paths = dagainPaths(rootDir);
-  const config = await loadConfig(paths.configPath);
+  const globalPaths = dagainPaths(rootDir);
+  const paths = await resolveSessionPaths(rootDir);
+  const config = await loadConfig(globalPaths.configPath);
   if (!config) throw new Error("Missing .dagain/config.json. Run `dagain init`.");
-  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
+  if (!(await pathExists(paths.dbPath))) throw new Error("Missing session state.sqlite. Run `dagain init`.");
   await ensureDepsRequiredStatusColumn({ dbPath: paths.dbPath });
   await ensureMailboxTable({ dbPath: paths.dbPath });
   const initGraph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
@@ -3191,8 +3243,8 @@ async function executeNode({
   const applyOutcome = async () => {
     const attempt = Number(node?.attempts || 0) + 1;
     const summary = typeof result?.summary === "string" ? result.summary : "";
-    const stdoutRel = path.relative(paths.rootDir, stdoutPath);
-    const resultRel = path.relative(paths.rootDir, resultPath);
+    const stdoutRel = path.relative(paths.rootDir, path.join(paths.stateDir, "runs", run, "stdout.log"));
+    const resultRel = path.relative(paths.rootDir, path.join(paths.stateDir, "runs", run, "result.json"));
     const errSummary =
       finalStatus === "success"
         ? ""
@@ -3842,7 +3894,7 @@ async function runChatMicrocall({ rootDir, paths, config, prompt, runnerName, ro
 }
 
 async function startSupervisorDetached({ rootDir, flags }) {
-  const paths = dagainPaths(rootDir);
+  const paths = await resolveSessionPaths(rootDir);
   const lock = await readSupervisorLock(paths.lockPath).catch(() => null);
   const pid = Number(lock?.pid);
   const host = String(lock?.host || "").trim();
@@ -3868,9 +3920,10 @@ async function startSupervisorDetached({ rootDir, flags }) {
 }
 
 async function chatCommand(rootDir, flags) {
-  const paths = dagainPaths(rootDir);
-  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
-  const config = await loadConfig(paths.configPath);
+  const globalPaths = dagainPaths(rootDir);
+  const paths = await resolveSessionPaths(rootDir);
+  if (!(await pathExists(paths.dbPath))) throw new Error("Missing session state.sqlite. Run `dagain init`.");
+  const config = await loadConfig(globalPaths.configPath);
   if (!config) throw new Error("Missing .dagain/config.json. Run `dagain init`.");
   process.stdout.write("dagain chat (type /help)\n");
   const noLlm = Boolean(flags["no-llm"]) || Boolean(flags.noLlm);
@@ -4346,6 +4399,7 @@ async function chatCommand(rootDir, flags) {
 }
 
 async function chatEntryCommand(rootDir, flags) {
+  await resolveChatSessionPaths(rootDir, flags);
   const plain = Boolean(flags.plain) || Boolean(flags["plain"]);
   const canTui = process.stdin.isTTY && process.stdout.isTTY;
   if (!plain && canTui) {
@@ -4356,8 +4410,9 @@ async function chatEntryCommand(rootDir, flags) {
 }
 
 async function uiCommand(rootDir, flags) {
+  await ensureSessionLayout(rootDir);
   const paths = dagainPaths(rootDir);
-  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
+  if (!(await pathExists(paths.dbPath))) throw new Error("Missing state.sqlite. Run `dagain init`.");
 
   const hostRaw = typeof flags.host === "string" ? flags.host : "127.0.0.1";
   const host = String(hostRaw || "").trim() || "127.0.0.1";
@@ -4388,10 +4443,11 @@ async function tuiCommand(rootDir, flags) {
 }
 
 async function nodeCommand(rootDir, positional, flags) {
-  const paths = dagainPaths(rootDir);
-  const config = await loadConfig(paths.configPath);
+  const globalPaths = dagainPaths(rootDir);
+  const paths = await resolveSessionPaths(rootDir);
+  const config = await loadConfig(globalPaths.configPath);
   if (!config) throw new Error("Missing .dagain/config.json. Run `dagain init`.");
-  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
+  if (!(await pathExists(paths.dbPath))) throw new Error("Missing session state.sqlite. Run `dagain init`.");
   await ensureDepsRequiredStatusColumn({ dbPath: paths.dbPath });
 
   const sub = String(positional?.[0] || "").trim();
@@ -4554,8 +4610,8 @@ async function nodeCommand(rootDir, positional, flags) {
 }
 
 async function depCommand(rootDir, positional, flags) {
-  const paths = dagainPaths(rootDir);
-  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
+  const paths = await resolveSessionPaths(rootDir);
+  if (!(await pathExists(paths.dbPath))) throw new Error("Missing session state.sqlite. Run `dagain init`.");
   await ensureDepsRequiredStatusColumn({ dbPath: paths.dbPath });
 
   const sub = String(positional?.[0] || "").trim();
@@ -4628,8 +4684,8 @@ async function depCommand(rootDir, positional, flags) {
 }
 
 async function controlCommand(rootDir, positional, flags) {
-  const paths = dagainPaths(rootDir);
-  if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
+  const paths = await resolveSessionPaths(rootDir);
+  if (!(await pathExists(paths.dbPath))) throw new Error("Missing session state.sqlite. Run `dagain init`.");
   await ensureMailboxTable({ dbPath: paths.dbPath });
 
   const sub = String(positional[0] || "").trim();
@@ -4698,7 +4754,7 @@ export async function main(argv) {
 	      process.stdout.write(usage());
 	      return;
 	    }
-	    const paths = dagainPaths(rootDir);
+	    const paths = await resolveChatSessionPaths(rootDir, flags);
 	    if (await pathExists(paths.dbPath)) await chatEntryCommand(rootDir, flags);
 	    else {
 	      await startCommand(rootDir, flags, []);
@@ -4806,7 +4862,7 @@ export async function main(argv) {
 }
 
 async function stopCommand(rootDir, flags) {
-  const paths = dagainPaths(rootDir);
+  const paths = await resolveSessionPaths(rootDir);
   const ui = createUi({ noColor: resolveNoColorFlag(flags), forceColor: resolveForceColorFlag(flags) });
 
   const lock = await readSupervisorLock(paths.lockPath);
@@ -4858,13 +4914,13 @@ async function templatesSyncCommand(rootDir, flags) {
 }
 
 async function answerCommand(rootDir, flags) {
-  const paths = dagainPaths(rootDir);
+  const paths = await resolveSessionPaths(rootDir);
   const ui = createUi({ noColor: resolveNoColorFlag(flags), forceColor: resolveForceColorFlag(flags) });
   const cancel = installCancellation({ ui, label: "answer" });
   const abortSignal = cancel.signal;
 
   try {
-    if (!(await pathExists(paths.dbPath))) throw new Error("Missing .dagain/state.sqlite. Run `dagain init`.");
+    if (!(await pathExists(paths.dbPath))) throw new Error("Missing session state.sqlite. Run `dagain init`.");
     const graph = await exportWorkgraphJson({ dbPath: paths.dbPath, snapshotPath: paths.graphSnapshotPath });
 
     const targetNodeId = typeof flags.node === "string" ? flags.node.trim() : "";
@@ -5010,7 +5066,7 @@ async function answerCommand(rootDir, flags) {
 }
 
 async function kvCommand(rootDir, positional, flags) {
-  const paths = dagainPaths(rootDir);
+  const paths = await resolveSessionPaths(rootDir);
   const ui = createUi({ noColor: resolveNoColorFlag(flags), forceColor: resolveForceColorFlag(flags) });
 
   const sub = String(positional?.[0] || "").trim().toLowerCase();
@@ -5091,12 +5147,13 @@ async function kvCommand(rootDir, positional, flags) {
 }
 
 async function microcallCommand(rootDir, flags) {
-  const paths = dagainPaths(rootDir);
+  const globalPaths = dagainPaths(rootDir);
+  const paths = await resolveSessionPaths(rootDir);
 
   const prompt = typeof flags.prompt === "string" ? flags.prompt.trim() : "";
   if (!prompt) throw new Error('Missing prompt. Provide `--prompt "..."`.');
 
-  const config = await loadConfig(paths.configPath);
+  const config = await loadConfig(globalPaths.configPath);
   if (!config) throw new Error("Missing .dagain/config.json. Run `dagain init` first.");
 
   const runnerNameFlag = typeof flags.runner === "string" ? flags.runner.trim() : "";
@@ -5109,7 +5166,7 @@ async function microcallCommand(rootDir, flags) {
   const parentRunId = String(process.env.DAGAIN_RUN_ID || "").trim();
   const microcallsBaseDir = parentRunId
     ? path.join(paths.runsDir, parentRunId, "microcalls")
-    : path.join(paths.stateDir, "microcalls");
+    : path.join(paths.sessionDir, "microcalls");
   const microDir = path.join(microcallsBaseDir, microId);
   await ensureDir(microDir);
 

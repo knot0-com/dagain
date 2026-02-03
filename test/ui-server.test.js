@@ -11,6 +11,8 @@ import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
+import { dagainSessionTestPaths } from "./helpers/session.js";
+
 function runCli({ binPath, cwd, args }) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [binPath, ...args], {
@@ -106,6 +108,7 @@ test("ui: serves dashboard state json", async () => {
     args: ["init", "--goal", "X", "--no-refine", "--force", "--no-color"],
   });
   assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
+  const sessionPaths = await dagainSessionTestPaths(tmpDir);
 
   // Configure deterministic runners so `/api/control/start` and chat-triggered starts don't try
   // to run real LLM tooling in CI/test.
@@ -242,13 +245,13 @@ test("ui: serves dashboard state json", async () => {
       startedAt: new Date().toISOString(),
       heartbeatAt: new Date().toISOString(),
     };
-    await writeFile(path.join(tmpDir, ".dagain", "lock"), JSON.stringify(lockJson, null, 2) + "\n", "utf8");
+    await writeFile(sessionPaths.lockPath, JSON.stringify(lockJson, null, 2) + "\n", "utf8");
     const startResult = await httpPost(`${baseUrl}/api/control/start`, {});
     assert.ok(startResult && startResult.ok);
     assert.equal(startResult.alreadyRunning, true);
 
     // Chat can enqueue control ops and still start the supervisor even if the model does not emit run.start.
-    await rm(path.join(tmpDir, ".dagain", "lock"), { force: true });
+    await rm(sessionPaths.lockPath, { force: true });
     const chatRes = await httpPost(`${baseUrl}/api/chat/send`, { message: "resume", runner: "mockChat", role: "planner" });
     assert.ok(chatRes && chatRes.ok);
     assert.match(String(chatRes.reply || ""), /Starting/);

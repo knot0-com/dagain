@@ -4,7 +4,7 @@
 
 import http from "node:http";
 import { randomBytes } from "node:crypto";
-import { open, readdir, readFile, rm, unlink } from "node:fs/promises";
+import { open, readdir, readFile, rm, stat, unlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -14,9 +14,10 @@ import { loadDashboardSnapshot } from "../lib/dashboard.js";
 import { kvGet, kvPut } from "../lib/db/kv.js";
 import { mailboxEnqueue } from "../lib/db/mailbox.js";
 import { ensureMailboxTable } from "../lib/db/migrate.js";
-import { loadConfig, saveConfig, defaultConfig } from "../lib/config.js";
+import { dagainSessionPaths, loadConfig, saveConfig, defaultConfig } from "../lib/config.js";
 import { executeContextOps, formatContextOpsResults, isContextOp } from "../lib/context-ops.js";
 import { readSupervisorLock } from "../lib/lock.js";
+import { createNewSession, ensureSessionLayout, listSessionIds, readCurrentSessionId, writeCurrentSessionId } from "../lib/sessions.js";
 
 function json(res, status, body) {
   const text = JSON.stringify(body, null, 2) + "\n";
@@ -341,6 +342,54 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
         const resultAbs = resultRel ? safeResolveUnderRoot(paths.rootDir, resultRel) : null;
         const text = resultAbs ? await readResultHumanText(resultAbs) : "";
         json(res, 200, { nodeId, path: resultRel || "", text: text || (lockRunId ? "status: in_progress" : "") });
+        return;
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/sessions") {
+        await ensureSessionLayout(paths.rootDir);
+        const currentId = await readCurrentSessionId(paths.rootDir);
+        const ids = await listSessionIds(paths.rootDir);
+        const sessions = [];
+        for (const id of ids) {
+          const sp = dagainSessionPaths(paths.rootDir, id);
+          let hasDb = false;
+          try {
+            await stat(sp.dbPath);
+            hasDb = true;
+          } catch {
+            hasDb = false;
+          }
+          sessions.push({ id, current: id === currentId, hasDb });
+        }
+        json(res, 200, { ok: true, currentId: currentId || "", sessions });
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/sessions/select") {
+        await requireToken(req);
+        const body = await readJsonBody(req, { maxBytes: 2_000 });
+        const id = typeof body?.id === "string" ? body.id.trim() : "";
+        if (!id) return json(res, 400, { error: "Missing session id." });
+        const sp = dagainSessionPaths(paths.rootDir, id);
+        try {
+          const st = await stat(sp.sessionDir);
+          if (!st.isDirectory()) throw new Error("not a dir");
+        } catch {
+          return json(res, 404, { error: `Unknown session: ${id}` });
+        }
+        await writeCurrentSessionId(paths.rootDir, id);
+        json(res, 200, { ok: true, id });
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/sessions/new") {
+        await requireToken(req);
+        const id = await createNewSession(paths.rootDir);
+        const initRes = await runCliCapture({ cwd: paths.rootDir, args: ["init", "--no-refine", "--reuse", "--no-color"] });
+        if (initRes.code !== 0) {
+          return json(res, 500, { error: initRes.stderr.trim() || initRes.stdout.trim() || "init failed" });
+        }
+        json(res, 200, { ok: true, id });
         return;
       }
 

@@ -1,6 +1,6 @@
 // Input — node:path and JSON/file helpers. If this file changes, update this header and the folder Markdown.
-// Output — `dagainPaths()` and config load/save/defaults. If this file changes, update this header and the folder Markdown.
-// Position — Config + `.dagain/` path conventions for the CLI. If this file changes, update this header and the folder Markdown.
+// Output — `.dagain/` global + session path helpers and config load/save/defaults. If this file changes, update this header and the folder Markdown.
+// Position — Config and state path conventions for dagain (global + per-session). If this file changes, update this header and the folder Markdown.
 
 import path from "node:path";
 import { pathExists, readJson, writeJsonAtomic } from "./fs.js";
@@ -10,10 +10,13 @@ export function dagainPaths(rootDir) {
   return {
     rootDir,
     stateDir,
+    sessionsDir: path.join(stateDir, "sessions"),
+    currentSessionPath: path.join(stateDir, "current-session.json"),
     configPath: path.join(stateDir, "config.json"),
+    // Legacy "current session view" paths (symlinks maintained by sessions.js).
+    dbPath: path.join(stateDir, "state.sqlite"),
     graphPath: path.join(stateDir, "workgraph.json"),
     graphSnapshotPath: path.join(stateDir, "workgraph.json"),
-    dbPath: path.join(stateDir, "state.sqlite"),
     lockPath: path.join(stateDir, "lock"),
     checkpointsDir: path.join(stateDir, "checkpoints"),
     runsDir: path.join(stateDir, "runs"),
@@ -21,7 +24,29 @@ export function dagainPaths(rootDir) {
     memoryDir: path.join(stateDir, "memory"),
     templatesDir: path.join(stateDir, "templates"),
     tmpDir: path.join(stateDir, "tmp"),
-    goalPath: path.join(rootDir, "GOAL.md"),
+    goalPath: path.join(stateDir, "GOAL.md"),
+  };
+}
+
+export function dagainSessionPaths(rootDir, sessionId) {
+  const globalPaths = dagainPaths(rootDir);
+  const id = String(sessionId || "").trim();
+  if (!id) throw new Error("Missing sessionId for dagainSessionPaths()");
+  const sessionDir = path.join(globalPaths.sessionsDir, id);
+  return {
+    ...globalPaths,
+    sessionId: id,
+    sessionDir,
+    graphPath: path.join(sessionDir, "workgraph.json"),
+    graphSnapshotPath: path.join(sessionDir, "workgraph.json"),
+    dbPath: path.join(sessionDir, "state.sqlite"),
+    lockPath: path.join(sessionDir, "lock"),
+    checkpointsDir: path.join(sessionDir, "checkpoints"),
+    runsDir: path.join(sessionDir, "runs"),
+    artifactsDir: path.join(sessionDir, "artifacts"),
+    memoryDir: path.join(sessionDir, "memory"),
+    tmpDir: path.join(sessionDir, "tmp"),
+    goalPath: path.join(sessionDir, "GOAL.md"),
   };
 }
 

@@ -42,7 +42,7 @@ dagain --help
 ## Quickstart (in a repo you want to work on)
 
 ```bash
-# 1) init state + config (creates .dagain/)
+# 1) init state + config (creates .dagain/ and a new session)
 dagain init --goal "Add a CLI flag --foo and tests" --no-refine
 
 # 2) run the supervisor (defaults to 3 workers; drops into chat on completion)
@@ -58,10 +58,16 @@ dagain control resume # enqueue resume (auto-starts supervisor if stopped; add -
 
 # 4) optional: live dashboards
 dagain tui           # terminal dashboard + chat (shows a GUI URL)
-dagain ui            # web dashboard (chat left + DAG + node logs, runs drawer, pan/zoom+fit, controls)
+dagain ui            # web dashboard (chat + DAG + node logs, sessions drawer, pan/zoom+fit, controls)
 ```
 
 Note: if you run `dagain` as root (e.g. via `sudo`) inside a repo, it will prefer executing runners as the repo owner to avoid root-owned outputs.
+
+## Sessions
+
+- `dagain` stores state per session under `.dagain/sessions/<sessionId>/`.
+- `dagain init --goal "..."` creates/updates the **current session goal** (`.dagain/GOAL.md`). If the current session already has state and is “inactive” (all nodes `done`), it auto-creates a new session unless you pass `--reuse`.
+- Use `--new-session` to force a new session even if the current one still has unfinished work.
 
 ### Common chat controls
 
@@ -96,7 +102,9 @@ Dependencies live in the `deps` table. A dep can require:
 
 ### External memory (SQLite)
 
-All durable state is in `.dagain/state.sqlite`:
+All durable state is session-scoped under `.dagain/sessions/<sessionId>/state.sqlite`.
+
+For backwards-compat and convenience, `.dagain/state.sqlite` is a symlink to the **current session** DB:
 
 - `nodes` / `deps` — the DAG and statuses
 - `kv_latest` / `kv_history` — durable “memory” and artifacts
@@ -164,15 +172,13 @@ Notes:
 
 Dagain stores state in:
 
-- `.dagain/config.json` — runner + role configuration
-- `.dagain/state.sqlite` — workgraph + KV + mailbox
-- `.dagain/workgraph.json` — human-readable graph snapshot (mirrors SQLite)
-- `.dagain/lock` — supervisor lock (used by `dagain stop`)
-- `.dagain/runs/` — per-node packets + logs + results
-- The UI “Log” panel shows **human-readable result output** (status/summary, checkpoint question) derived from `result.json` by default; raw stdout is still available in `.dagain/runs/*/stdout.log` and the Runs drawer.
-- `.dagain/artifacts/` — non-source outputs (reports, scratch notes, generated data)
-- `.dagain/checkpoints/` — human-in-the-loop checkpoints
-- `.dagain/memory/` — durable notes + logs (`task_plan.md`, `findings.md`, `progress.md`)
+- `.dagain/config.json` — runner + role configuration (shared across sessions)
+- `.dagain/current-session.json` — pointer to the current session id
+- `.dagain/sessions/<sessionId>/` — session storage (goal + db + runs + logs + artifacts)
+- `.dagain/state.sqlite` / `.dagain/workgraph.json` / `.dagain/runs/` / `.dagain/artifacts/` / `.dagain/checkpoints/` / `.dagain/memory/` — current-session “view” (symlinks)
+- `.dagain/GOAL.md` — current session goal (symlink)
+
+The UI “Log” panel shows **human-readable result output** (status/summary, checkpoint question) derived from `result.json` by default; raw stdout is still available in `.dagain/runs/*/stdout.log`.
 
 ## Publishing
 

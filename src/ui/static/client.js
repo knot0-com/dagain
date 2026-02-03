@@ -1,5 +1,5 @@
 // Input — DOM elements from index.html, SSE events from /events, REST APIs from server.js
-// Output — live DAG visualization, chat interface, controls, runs panel
+// Output — live DAG visualization, chat interface, controls, sessions panel
 // Position — client-side runtime for the dagain web dashboard
 
 const token = (window.__DAGAIN && window.__DAGAIN.token) ? window.__DAGAIN.token : "";
@@ -1059,8 +1059,9 @@ function renderGraph(graph) {
 let lastSnapshot = null;
 let selectedNodeId = "";
 let logPollTimer = null;
-let runs = [];
-let selectedRunId = "";
+let sessions = [];
+let currentSessionId = "";
+let selectedSessionId = "";
 let needsHumanNotified = new Set();
 
 function readViewPrefs() {
@@ -1156,7 +1157,7 @@ function toggleRunsPane() {
   const next = { ...currentViewState(), runs: hidden };
   applyViewPrefs(next);
   writeViewPrefs(next);
-  if (hidden) refreshRuns();
+  if (hidden) refreshSessions();
 }
 
 /* ── Mobile tabs ──────────────────────────────────────────────────────── */
@@ -1484,79 +1485,79 @@ applyViewPrefs(readViewPrefs());
 if (btnToggleChat) btnToggleChat.onclick = () => toggleChatPane();
 if (btnToggleSelection) btnToggleSelection.onclick = () => toggleSelectionPane();
 
-async function fetchRuns() {
-  const res = await fetch("/api/runs?limit=80");
+async function fetchSessions() {
+  const res = await fetch("/api/sessions");
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new Error((data && data.error) ? data.error : ("HTTP " + res.status));
   return data;
 }
 
-async function fetchRunLog(runId) {
-  const id = String(runId || "").trim();
-  if (!id) return { runId: "", path: "", text: "" };
-  const res = await fetch("/api/run/log?runId=" + encodeURIComponent(id) + "&tail=10000");
-  const data = await res.json().catch(() => null);
-  if (!res.ok) throw new Error((data && data.error) ? data.error : ("HTTP " + res.status));
-  return data;
-}
-
-function renderRunsList() {
+function renderSessionsList() {
   if (!elRunsList) return;
-  const list = Array.isArray(runs) ? runs : [];
+  const list = Array.isArray(sessions) ? sessions : [];
   if (!list.length) {
     elRunsList.innerHTML = "";
     const emptyRuns = document.createElement("div");
     emptyRuns.className = "emptyState";
-    emptyRuns.innerHTML = '<div class="emptyIcon">\u25B6</div><div class="emptyText">No runs yet</div><div class="emptyHint">Start a run to see history here</div>';
+    emptyRuns.innerHTML = '<div class="emptyIcon">\u25B6</div><div class="emptyText">No sessions yet</div><div class="emptyHint">Create a session to begin</div>';
     elRunsList.appendChild(emptyRuns);
     return;
   }
   elRunsList.innerHTML = "";
   let staggerIdx = 0;
-  for (const r of list) {
-    const id = r && r.runId ? String(r.runId) : "";
+  for (const s of list) {
+    const id = s && s.id ? String(s.id) : "";
     if (!id) continue;
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "runItem stagger" + (id === selectedRunId ? " active" : "");
+    btn.className = "runItem stagger" + (id === selectedSessionId ? " active" : "");
     btn.style.animationDelay = (staggerIdx * 30) + "ms";
     staggerIdx++;
-    const nodeId = typeof r?.nodeId === "string" ? r.nodeId : "";
-    const status = typeof r?.status === "string" ? r.status : "";
-    btn.textContent = truncateText(id + (nodeId ? "  " + nodeId : "") + (status ? "  [" + status + "]" : ""), 72);
-    btn.onclick = () => selectRun(id);
+    const isCurrent = Boolean(s?.current);
+    const hasDb = Boolean(s?.hasDb);
+    const label =
+      (isCurrent ? "* " : "") +
+      id +
+      (hasDb ? "" : "  [uninitialized]");
+    btn.textContent = truncateText(label, 72);
+    btn.onclick = () => selectSession(id);
     elRunsList.appendChild(btn);
   }
 }
 
-async function selectRun(runId) {
-  const id = String(runId || "").trim();
+async function selectSession(sessionId) {
+  const id = String(sessionId || "").trim();
   if (!id) return;
-  selectedRunId = id;
-  renderRunsList();
-  updateDeleteButton();
+  selectedSessionId = id;
+  renderSessionsList();
+  updateSwitchButton();
   try {
-    const log = await fetchRunLog(id);
-    if (elRunMeta) elRunMeta.textContent = (log.path ? ("log: " + log.path) : ("run: " + id));
+    const selected = Array.isArray(sessions) ? sessions.find((s) => s && String(s.id) === id) : null;
+    const isCurrent = Boolean(selected?.current);
+    const hasDb = Boolean(selected?.hasDb);
+    if (elRunMeta) elRunMeta.textContent = (isCurrent ? "current session: " : "selected session: ") + id;
     if (elRunLog) {
-      elRunLog.textContent = log.text || "(empty)";
+      elRunLog.textContent =
+        (hasDb ? "status: initialized\n" : "status: uninitialized\n") +
+        "action: press Switch to load this session in the UI\n";
       elRunLog.scrollTop = elRunLog.scrollHeight;
     }
   } catch (e) {
-    if (elRunMeta) elRunMeta.textContent = "run: " + id;
+    if (elRunMeta) elRunMeta.textContent = "session: " + id;
     if (elRunLog) elRunLog.textContent = String((e && e.message) ? e.message : e);
   }
 }
 
-async function refreshRuns() {
+async function refreshSessions() {
   try {
-    const data = await fetchRuns();
-    runs = Array.isArray(data && data.runs) ? data.runs : [];
-    if (!selectedRunId && runs[0] && runs[0].runId) selectedRunId = String(runs[0].runId);
-    renderRunsList();
-    if (selectedRunId) await selectRun(selectedRunId);
+    const data = await fetchSessions();
+    sessions = Array.isArray(data && data.sessions) ? data.sessions : [];
+    currentSessionId = typeof data?.currentId === "string" ? data.currentId : "";
+    if (!selectedSessionId && currentSessionId) selectedSessionId = currentSessionId;
+    renderSessionsList();
+    if (selectedSessionId) await selectSession(selectedSessionId);
   } catch (e) {
-    runs = [];
+    sessions = [];
     const msg = String((e && e.message) ? e.message : e);
     const friendly = msg === "Failed to fetch" ? "Could not connect to server" : msg;
     if (elRunsList) {
@@ -1569,40 +1570,30 @@ async function refreshRuns() {
   }
 }
 
-async function deleteRun(runId) {
-  const id = String(runId || "").trim();
+async function switchSession(sessionId) {
+  const id = String(sessionId || "").trim();
   if (!id) return;
-  const ok = await showConfirm("Delete run " + truncateText(id, 48) + "?");
+  const ok = await showConfirm("Switch to session " + truncateText(id, 48) + "?");
   if (!ok) return;
-  const doDelete = async () => {
-    const res = await fetch("/api/run/delete", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-dagain-token": token },
-      body: JSON.stringify({ runId: id }),
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok) throw new Error((data && data.error) ? data.error : ("HTTP " + res.status));
-    if (selectedRunId === id) {
-      selectedRunId = "";
-      if (elRunMeta) elRunMeta.textContent = "select a run to view its log";
-      if (elRunLog) elRunLog.textContent = "(empty)";
-    }
-    await refreshRuns();
-    toast("Run deleted", "success");
+  const doSwitch = async () => {
+    await postJson("/api/sessions/select", { id });
+    window.location.reload();
   };
   try {
     if (btnDeleteRun) {
-      await withLoading(btnDeleteRun, doDelete);
+      await withLoading(btnDeleteRun, doSwitch);
     } else {
-      await doDelete();
+      await doSwitch();
     }
   } catch (err) {
-    toast(String(err?.message || err || "Failed to delete run"), "error");
+    toast(String(err?.message || err || "Failed to switch session"), "error");
   }
 }
 
-function updateDeleteButton() {
-  if (btnDeleteRun) btnDeleteRun.disabled = !selectedRunId;
+function updateSwitchButton() {
+  if (!btnDeleteRun) return;
+  const id = String(selectedSessionId || "").trim();
+  btnDeleteRun.disabled = !id || (currentSessionId && id === currentSessionId);
 }
 
 async function clearChat() {
@@ -1633,47 +1624,25 @@ async function clearChat() {
   }
 }
 
-async function startRun() {
-  const doStart = async () => {
-    const res = await fetch("/api/control/start", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-dagain-token": token },
-      body: "{}",
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok) {
-      toast((data && data.error) || ("HTTP " + res.status), "error");
-      return;
-    }
-    if (data && data.alreadyRunning) {
-      toast("Supervisor already running", "info");
-    } else {
-      // Clear chat history for the new run
-      await fetch("/api/chat/clear", {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-dagain-token": token },
-        body: "{}",
-      }).catch(() => {});
-      lastChatFingerprint = "";
-      await refreshChat();
-      toast(data?.message || "Supervisor started", "success");
-    }
-    await refreshRuns();
+async function createSession() {
+  const doCreate = async () => {
+    await postJson("/api/sessions/new", {});
+    window.location.reload();
   };
   try {
     if (btnStartRun) {
-      await withLoading(btnStartRun, doStart);
+      await withLoading(btnStartRun, doCreate);
     } else {
-      await doStart();
+      await doCreate();
     }
   } catch (err) {
-    toast(String(err?.message || err || "Failed to start"), "error");
+    toast(String(err?.message || err || "Failed to create session"), "error");
   }
 }
 
-if (btnDeleteRun) btnDeleteRun.onclick = () => deleteRun(selectedRunId);
+if (btnDeleteRun) btnDeleteRun.onclick = () => switchSession(selectedSessionId);
 if (btnClearChat) btnClearChat.onclick = () => clearChat();
-if (btnStartRun) btnStartRun.onclick = () => startRun();
+if (btnStartRun) btnStartRun.onclick = () => createSession();
 if (btnToggleRuns) btnToggleRuns.onclick = () => toggleRunsPane();
 
 btnFit.onclick = () => fitToGraph({ animate: true });
@@ -2030,7 +1999,7 @@ refreshChat();
 setInterval(refreshChat, 2000);
 
 // Load runs on startup (visible by default)
-if (!document.body.classList.contains("hideRuns")) refreshRuns();
+if (!document.body.classList.contains("hideRuns")) refreshSessions();
 
 // Update relative timestamps in chat every 30s
 setInterval(() => {

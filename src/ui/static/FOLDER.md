@@ -1,7 +1,7 @@
 ---
 title: "Static Assets"
 status: active
-date: "2026-01-31"
+date: "2026-02-02"
 parents: ["src/ui"]
 tags: [ui, static, frontend]
 input: "Served by server.js via /static/* route"
@@ -18,5 +18,5 @@ The HTML template uses a `__DAGAIN_TOKEN__` placeholder that the server replaces
 | --- | --- | --- |
 | `index.html` | runtime | HTML shell with token placeholder, links to styles.css and client.js |
 | `styles.css` | runtime | All CSS rules for the dashboard (theme, layout, components, responsive) |
-| `client.js` | runtime | Client-side JS (DAG rendering, pan/zoom, chat with markdown/streaming, controls, SSE diffing, minimap, node search/filter, runs drawer) |
+| `client.js` | runtime | Client-side JS (DAG rendering, pan/zoom, chat with markdown/streaming, controls, SSE diffing, minimap, node search/filter, sessions drawer) |
 | `FOLDER.md` | docs | This file |

@@ -36,9 +36,9 @@
 
     <div class="appBody">
       <nav class="activityBar" id="activityBar">
-        <button class="abBtn panel-active" id="toggleRuns" title="Runs (R)">
+        <button class="abBtn panel-active" id="toggleRuns" title="Sessions (R)">
           <svg class="abSvg" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 5h14M3 10h14M3 15h14"/></svg>
-          <span class="abLabel">Runs</span>
+          <span class="abLabel">Sessions</span>
         </button>
         <button class="abBtn panel-active" id="toggleChat" title="Chat (C)">
           <svg class="abSvg" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h12a1 1 0 011 1v8a1 1 0 01-1 1H8l-4 3v-3a1 1 0 01-1-1V5a1 1 0 011-1z"/></svg>
@@ -60,16 +60,16 @@
 
       <aside class="runsPanel card" id="runsPanel">
         <div class="cardHeader">
-          <h2>Runs</h2>
+          <h2>Sessions</h2>
           <div style="display:flex; gap:6px;">
-            <button class="btn primary" id="startRun" title="Start a new supervisor run">Start</button>
-            <button class="btn danger" id="deleteRun" disabled title="Delete selected run">Delete</button>
+            <button class="btn primary" id="startRun" title="Create a new session">New</button>
+            <button class="btn" id="deleteRun" disabled title="Switch to selected session">Switch</button>
           </div>
         </div>
         <div class="cardBody runsPanelBody">
           <div class="runsList mono" id="runsList">(loading)</div>
-          <div class="runMeta mono" id="runMeta">select a run to view its log</div>
-          <div class="log mono" id="runLog">(empty)</div>
+          <div class="runMeta mono" id="runMeta">select a session</div>
+          <div class="log mono" id="runLog">(tip: sessions isolate goal + memory + runs)</div>
         </div>
       </aside>
 

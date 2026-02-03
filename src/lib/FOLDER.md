@@ -17,7 +17,7 @@ It owns config/state IO, SQLite DB helpers, and workgraph scheduling.
 | Name | Role/Status | Responsibility |
 | --- | --- | --- |
 | `args.js` | runtime | CLI argument parsing utilities |
-| `config.js` | runtime | Config + path helpers for `.dagain/` (default workers, runner defaults) |
+| `config.js` | runtime | Config + path helpers for `.dagain/` (global + current-session view + per-session) |
 | `crypto.js` | runtime | File hashing helpers |
 | `context-ops.js` | runtime | Allowlisted read-only ctx.* ops for chat prompt enrichment |
 | `dashboard.js` | runtime | Snapshot builder for dashboards (counts/nodes/next) |
@@ -26,6 +26,7 @@ It owns config/state IO, SQLite DB helpers, and workgraph scheduling.
 | `lock.js` | runtime | Supervisor lock acquisition/heartbeat |
 | `ownership-locks.js` | runtime | Resource ownership lock management |
 | `runner.js` | runtime | Runner resolution + invocation helpers |
+| `sessions.js` | runtime | Session-scoped state layout + migration + current-session pointer |
 | `select.js` | runtime | Node selection logic |
 | `template.js` | runtime | Template rendering helpers |
 | `ui.js` | runtime | Plain terminal UI helpers |
