@@ -1,7 +1,7 @@
 ---
 title: "dagain"
 status: active
-date: "2026-02-02"
+date: "2026-02-04"
 parents: []
 tags: ["dagain", "docs"]
 input: "GitHub/npm readers and CLI users"
@@ -60,6 +60,8 @@ dagain control resume # enqueue resume (auto-starts supervisor if stopped; add -
 dagain tui           # terminal dashboard + chat (shows a GUI URL)
 dagain ui            # web dashboard (chat + DAG + node logs, sessions drawer, pan/zoom+fit, controls)
 ```
+
+Tip: in a fresh repo you can also just run `dagain` (no args) or `dagain ui` — both will auto-initialize a session with a placeholder goal if no state exists yet.
 
 Note: if you run `dagain` as root (e.g. via `sudo`) inside a repo, it will prefer executing runners as the repo owner to avoid root-owned outputs.
 

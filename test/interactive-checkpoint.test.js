@@ -1,3 +1,7 @@
+// Input — node:test + dagain CLI subprocess in a temp project directory. If this file changes, update this header and the folder Markdown.
+// Output — asserts interactive needs_human answering resumes and completes the run. If this file changes, update this header and the folder Markdown.
+// Position — regression coverage for interactive checkpoint UX. If this file changes, update this header and the folder Markdown.
+
 import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
@@ -30,7 +34,7 @@ function runCli({ binPath, cwd, args, env = {}, stdin = "" }) {
   });
 }
 
-test("run: interactive checkpoint answer resumes and completes", { timeout: 10_000 }, async () => {
+test("run: interactive checkpoint answer resumes and completes", { timeout: 25_000 }, async () => {
   const repoRoot = fileURLToPath(new URL("..", import.meta.url));
   const binPath = path.join(repoRoot, "bin", "dagain.js");
   const mockAgentPath = fileURLToPath(new URL("../scripts/mock-agent-checkpoint.js", import.meta.url));

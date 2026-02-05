@@ -1,7 +1,7 @@
 ---
 title: "choreo/src/ui"
 status: active
-date: "2026-02-02"
+date: "2026-02-04"
 parents: ["choreo/src"]
 tags: ["dagain", "ui", "web", "folder"]
 input: "Local dashboard server + frontend assets"

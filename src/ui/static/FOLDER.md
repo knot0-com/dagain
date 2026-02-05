@@ -1,7 +1,7 @@
 ---
 title: "Static Assets"
 status: active
-date: "2026-02-02"
+date: "2026-02-04"
 parents: ["src/ui"]
 tags: [ui, static, frontend]
 input: "Served by server.js via /static/* route"

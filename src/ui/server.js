@@ -43,6 +43,21 @@ function safeJsonParse(text, fallback = null) {
   }
 }
 
+async function isSessionRunning({ rootDir, sessionId }) {
+  const sp = dagainSessionPaths(rootDir, sessionId);
+  const lock = await readSupervisorLock(sp.lockPath).catch(() => null);
+  const pid = Number(lock?.pid);
+  const lockHost = String(lock?.host || "").trim();
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  if (lockHost !== os.hostname()) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function truncateText(value, maxLen) {
   const s = String(value ?? "");
   const n = Number(maxLen);
@@ -390,6 +405,39 @@ export async function serveDashboard({ paths, host = "127.0.0.1", port = 3876 })
           return json(res, 500, { error: initRes.stderr.trim() || initRes.stdout.trim() || "init failed" });
         }
         json(res, 200, { ok: true, id });
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/sessions/delete") {
+        await requireToken(req);
+        const body = await readJsonBody(req, { maxBytes: 2_000 });
+        const id = typeof body?.id === "string" ? body.id.trim() : "";
+        if (!id) return json(res, 400, { error: "Missing session id." });
+        const sp = dagainSessionPaths(paths.rootDir, id);
+        try {
+          const st = await stat(sp.sessionDir);
+          if (!st.isDirectory()) throw new Error("not a dir");
+        } catch {
+          return json(res, 404, { error: `Unknown session: ${id}` });
+        }
+        const running = await isSessionRunning({ rootDir: paths.rootDir, sessionId: id }).catch(() => false);
+        if (running) return json(res, 409, { error: `Session is running: ${id}` });
+
+        const currentId = await readCurrentSessionId(paths.rootDir);
+        const isCurrent = currentId && id === currentId;
+        if (isCurrent) {
+          const newId = await createNewSession(paths.rootDir);
+          const initRes = await runCliCapture({ cwd: paths.rootDir, args: ["init", "--no-refine", "--reuse", "--no-color"] });
+          if (initRes.code !== 0) {
+            return json(res, 500, { error: initRes.stderr.trim() || initRes.stdout.trim() || "init failed" });
+          }
+          await rm(sp.sessionDir, { recursive: true, force: true });
+          json(res, 200, { ok: true, deletedId: id, currentId: newId });
+          return;
+        }
+
+        await rm(sp.sessionDir, { recursive: true, force: true });
+        json(res, 200, { ok: true, deletedId: id });
         return;
       }
 

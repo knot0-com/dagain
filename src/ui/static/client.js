@@ -97,6 +97,335 @@ let lastGraph = null;
 let lastAutoScrollId = "";
 let fitView = null;
 let viewBox = null;
+
+// Cytoscape instance
+let cy = null;
+const elCyGraph = document.getElementById("cyGraph");
+
+// Register cytoscape-dagre extension if available
+if (typeof cytoscape !== "undefined" && typeof cytoscapeDagre !== "undefined") {
+  cytoscape.use(cytoscapeDagre);
+  console.log("[Cytoscape] dagre extension registered");
+} else if (typeof cytoscape !== "undefined" && typeof dagre !== "undefined") {
+  // cytoscape-dagre auto-registers when both are present
+  console.log("[Cytoscape] dagre should be auto-registered");
+}
+
+function initCytoscape() {
+  if (cy) return cy;
+
+  console.log("[Cytoscape] Initializing, container:", elCyGraph);
+  console.log("[Cytoscape] Container dimensions:", elCyGraph ? elCyGraph.offsetWidth + "x" + elCyGraph.offsetHeight : "N/A");
+
+  if (!elCyGraph) {
+    console.error("[Cytoscape] Container #cyGraph not found!");
+    return null;
+  }
+
+  try {
+    cy = cytoscape({
+      container: elCyGraph,
+    style: [
+      {
+        selector: "node",
+        style: {
+          "shape": "round-rectangle",
+          "width": 200,
+          "height": 50,
+          "background-color": "#181818",
+          "border-width": 1.5,
+          "border-color": "rgba(255, 255, 255, 0.2)",
+          "label": "data(label)",
+          "text-valign": "center",
+          "text-halign": "center",
+          "font-size": "11px",
+          "font-family": "JetBrains Mono, SF Mono, Consolas, monospace",
+          "color": "#e5e5e5",
+          "text-wrap": "ellipsis",
+          "text-max-width": "180px",
+          "text-overflow-wrap": "anywhere",
+          "transition-property": "border-color, border-width, background-color",
+          "transition-duration": "0.2s"
+        }
+      },
+      {
+        selector: "node:selected",
+        style: {
+          "border-color": "#4ecdc4",
+          "border-width": 2.5
+        }
+      },
+      {
+        selector: "node.open",
+        style: {
+          "border-color": "rgba(255, 255, 255, 0.25)"
+        }
+      },
+      {
+        selector: "node.in_progress",
+        style: {
+          "border-color": "#ffb000",
+          "border-width": 2.5,
+          "background-color": "rgba(255, 176, 0, 0.12)"
+        }
+      },
+      {
+        selector: "node.done",
+        style: {
+          "border-color": "rgba(34, 197, 94, 0.6)",
+          "background-color": "rgba(34, 197, 94, 0.08)",
+          "opacity": 0.7
+        }
+      },
+      {
+        selector: "node.failed",
+        style: {
+          "border-color": "rgba(255, 68, 68, 0.85)",
+          "border-width": 2.5,
+          "background-color": "rgba(255, 68, 68, 0.12)"
+        }
+      },
+      {
+        selector: "node.needs_human",
+        style: {
+          "border-color": "rgba(168, 85, 247, 0.85)",
+          "border-width": 2.5,
+          "background-color": "rgba(168, 85, 247, 0.12)"
+        }
+      },
+      {
+        selector: "node.next",
+        style: {
+          "border-color": "#ffb000",
+          "border-width": 2
+        }
+      },
+      {
+        selector: "node.dimmed",
+        style: {
+          "opacity": 0.15
+        }
+      },
+      {
+        selector: "edge",
+        style: {
+          "width": 1.5,
+          "line-color": "rgba(120, 180, 220, 0.5)",
+          "target-arrow-color": "rgba(120, 180, 220, 0.6)",
+          "target-arrow-shape": "triangle",
+          "arrow-scale": 0.8,
+          "curve-style": "bezier",
+          "transition-property": "line-color, width",
+          "transition-duration": "0.2s"
+        }
+      },
+      {
+        selector: "edge.parent",
+        style: {
+          "line-style": "dashed",
+          "line-color": "rgba(180, 160, 220, 0.45)",
+          "target-arrow-color": "rgba(180, 160, 220, 0.5)"
+        }
+      },
+      {
+        selector: "edge.active",
+        style: {
+          "line-color": "#4ecdc4",
+          "target-arrow-color": "#4ecdc4",
+          "width": 2.5
+        }
+      },
+      {
+        selector: "edge.flowing",
+        style: {
+          "line-color": "#ffb000",
+          "target-arrow-color": "#ffb000",
+          "width": 2
+        }
+      },
+      {
+        selector: "edge.dimmed",
+        style: {
+          "opacity": 0.1
+        }
+      },
+      {
+        selector: "node.hidden-done",
+        style: {
+          "display": "none"
+        }
+      },
+      {
+        selector: "edge.hidden-done",
+        style: {
+          "display": "none"
+        }
+      },
+      {
+        selector: ".filtered-out",
+        style: {
+          "display": "none"
+        }
+      },
+      {
+        selector: ".filter-dimmed",
+        style: {
+          "opacity": 0.15
+        }
+      }
+    ],
+    layout: { name: "preset" },
+    wheelSensitivity: 0.3,
+    minZoom: 0.2,
+    maxZoom: 3
+  });
+
+  // Handle node selection
+  cy.on("tap", "node", function(evt) {
+    const nodeId = evt.target.id();
+    selectNode(nodeId);
+  });
+
+  // Handle background tap to deselect
+  cy.on("tap", function(evt) {
+    if (evt.target === cy) {
+      // Background clicked
+    }
+  });
+
+  // Update zoom display on zoom changes
+  cy.on("zoom", function() {
+    const zoomPct = Math.round(cy.zoom() * 100);
+    if (elZoomPct) elZoomPct.textContent = zoomPct + "%";
+    if (elZoomSlider) elZoomSlider.value = Math.min(400, Math.max(25, zoomPct));
+  });
+
+  // Redraw minimap on viewport changes (pan/zoom)
+  cy.on("viewport", function() {
+    drawMinimap();
+  });
+
+  console.log("[Cytoscape] Initialized successfully");
+  return cy;
+  } catch (err) {
+    console.error("[Cytoscape] Initialization error:", err);
+    return null;
+  }
+}
+
+function renderCytoscape(snapshot) {
+  if (!cy) initCytoscape();
+
+  console.log("[Cytoscape] renderCytoscape called, cy:", !!cy, "container:", !!elCyGraph);
+
+  const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
+  console.log("[Cytoscape] nodes count:", nodes.length);
+  const nextId = snapshot && snapshot.next && snapshot.next.id ? snapshot.next.id : "";
+
+  // Build node and edge elements for Cytoscape
+  const elements = [];
+  const nodeIds = new Set();
+
+  // Create nodes
+  for (const n of nodes) {
+    if (!n || !n.id) continue;
+    nodeIds.add(n.id);
+
+    const status = statusKey(n);
+    const label = n.id + (n.title ? "\n" + truncateText(n.title, 30) : "");
+
+    elements.push({
+      group: "nodes",
+      data: {
+        id: n.id,
+        label: label,
+        status: status,
+        parentId: n.parentId || null
+      },
+      classes: status + (n.id === nextId ? " next" : "")
+    });
+  }
+
+  // Create edges
+  for (const n of nodes) {
+    if (!n || !n.id) continue;
+    const deps = Array.isArray(n.dependsOn) ? n.dependsOn : [];
+    for (const from of deps) {
+      if (!nodeIds.has(from)) continue;
+      elements.push({
+        group: "edges",
+        data: {
+          id: from + "->" + n.id,
+          source: from,
+          target: n.id,
+          kind: "dep"
+        },
+        classes: "dep"
+      });
+    }
+    if (n.parentId && nodeIds.has(n.parentId) && !deps.includes(n.parentId)) {
+      elements.push({
+        group: "edges",
+        data: {
+          id: n.parentId + "->>" + n.id,
+          source: n.parentId,
+          target: n.id,
+          kind: "parent"
+        },
+        classes: "parent"
+      });
+    }
+  }
+
+  // Update Cytoscape elements
+  cy.batch(() => {
+    // Remove old elements
+    cy.elements().remove();
+    // Add new elements
+    cy.add(elements);
+  });
+
+  // Run dagre layout (must be outside batch)
+  if (cy.nodes().length > 0) {
+    console.log("[Cytoscape] Running dagre layout for", cy.nodes().length, "nodes");
+    try {
+      cy.layout({
+        name: "dagre",
+        rankDir: "LR",
+        nodeSep: 40,
+        rankSep: 80,
+        edgeSep: 20,
+        ranker: "network-simplex",
+        fit: true,
+        padding: 40,
+        animate: false
+      }).run();
+      console.log("[Cytoscape] Layout complete, bounding box:", cy.elements().boundingBox());
+    } catch (err) {
+      console.error("[Cytoscape] Layout error:", err);
+      // Fallback to preset layout
+      cy.layout({ name: "preset", fit: true, padding: 40 }).run();
+    }
+  } else {
+    console.log("[Cytoscape] No nodes to layout");
+  }
+
+  // Update selection
+  if (selectedNodeId && cy.$id(selectedNodeId).length) {
+    cy.$id(selectedNodeId).select();
+  }
+
+  // Mark edges connected to in_progress nodes as flowing
+  cy.edges().forEach(edge => {
+    const targetNode = cy.$id(edge.data("target"));
+    if (targetNode.length && targetNode.hasClass("in_progress")) {
+      edge.addClass("flowing");
+    }
+  });
+
+  // Update minimap
+  drawMinimap();
+}
 let userMovedView = false;
 let keyboardFocusId = "";
 let nodeSearchQuery = "";
@@ -659,7 +988,7 @@ function assignEdgeSlots(edges) {
   }
 }
 
-function buildGraph(snapshot, selectedId) {
+function buildGraph(snapshot, selectedId, containerRect) {
   const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
   const nextId = snapshot && snapshot.next && snapshot.next.id ? snapshot.next.id : "";
   const { byId, layer } = layerDag(nodes);
@@ -676,27 +1005,202 @@ function buildGraph(snapshot, selectedId) {
   const adjacency = buildAdjacency({ nodes, byId });
   orderLayers({ layers, adjacency, layerById });
 
-  const nodeW = 240;
-  const nodeH = 54;
-  const colGap = 90;
-  const rowGap = 22;
-  const pad = 24;
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SIZING: Calculate node dimensions to fill canvas
+  // ═══════════════════════════════════════════════════════════════════════════
+  const baseNodeW = 200;
+  const baseNodeH = 50;
+  const pad = 40;
 
-  const pos = new Map();
-  const colHeights = [];
-  for (let c = 0; c < layers.length; c++) {
-    const col = layers[c];
-    colHeights[c] = pad + col.length * (nodeH + rowGap) - rowGap + pad;
+  const cw = containerRect && containerRect.width > 0 ? containerRect.width : 800;
+  const ch = containerRect && containerRect.height > 0 ? containerRect.height : 600;
+  const availW = cw - pad * 2;
+  const availH = ch - pad * 2;
+
+  const numCols = Math.max(1, layers.length);
+  const maxRows = Math.max(1, ...layers.map(col => col.length));
+  const totalNodes = nodes.length || 1;
+
+  // Calculate scale to make nodes fill available space nicely
+  // Horizontal: fit all columns with gaps
+  const minHGap = 60;
+  const minVGap = 20;
+  const scaleW = (availW - (numCols - 1) * minHGap) / (numCols * baseNodeW);
+  const scaleH = (availH - (maxRows - 1) * minVGap) / (maxRows * baseNodeH);
+  const scale = Math.min(2.0, Math.max(1.0, Math.min(scaleW, scaleH)));
+
+  const nodeW = Math.round(baseNodeW * scale);
+  const nodeH = Math.round(baseNodeH * scale);
+
+  const w = cw;
+  const h = ch;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BUILD TREE STRUCTURE: Convert DAG to tree for layout
+  // ═══════════════════════════════════════════════════════════════════════════
+  const childrenOf = new Map();
+  const parentOf = new Map();
+
+  for (const n of nodes) {
+    if (!n || !n.id) continue;
+    if (n.parentId && byId.has(n.parentId)) {
+      parentOf.set(n.id, n.parentId);
+      if (!childrenOf.has(n.parentId)) childrenOf.set(n.parentId, []);
+      childrenOf.get(n.parentId).push(n.id);
+    }
   }
-  const h = Math.max(320, ...colHeights);
-  const w = pad + layers.length * (nodeW + colGap) - colGap + pad;
+
+  // Find root nodes (no parent)
+  const roots = nodes.filter(n => n && n.id && !parentOf.has(n.id));
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TREE LAYOUT: Proper hierarchical positioning (Reingold-Tilford style)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Calculate subtree height (number of leaves) for each node
+  const subtreeLeaves = new Map();
+  function countLeaves(nodeId) {
+    if (subtreeLeaves.has(nodeId)) return subtreeLeaves.get(nodeId);
+    const children = childrenOf.get(nodeId) || [];
+    if (children.length === 0) {
+      subtreeLeaves.set(nodeId, 1);
+      return 1;
+    }
+    const total = children.reduce((sum, cid) => sum + countLeaves(cid), 0);
+    subtreeLeaves.set(nodeId, total);
+    return total;
+  }
+  for (const n of nodes) {
+    if (n && n.id) countLeaves(n.id);
+  }
+
+  // Calculate total leaves for spacing
+  const totalLeaves = roots.reduce((sum, r) => sum + (subtreeLeaves.get(r.id) || 1), 0);
+
+  // Calculate horizontal positions (columns spread evenly)
+  const hGap = numCols > 1 ? (availW - numCols * nodeW) / (numCols - 1) : 0;
+  const colX = (c) => {
+    if (numCols === 1) return pad + (availW - nodeW) / 2;
+    return pad + c * (nodeW + hGap);
+  };
+
+  // Assign Y positions using tree layout algorithm
+  const pos = new Map();
+  let currentLeafY = 0;
+
+  // Position nodes recursively, depth-first
+  function positionNode(nodeId, col) {
+    const children = childrenOf.get(nodeId) || [];
+    const x = colX(col);
+
+    if (children.length === 0) {
+      // Leaf node: assign next available Y slot
+      const leafSpacing = availH / totalLeaves;
+      const y = pad + currentLeafY * leafSpacing + (leafSpacing - nodeH) / 2;
+      currentLeafY++;
+      pos.set(nodeId, { x, y: Math.round(y), w: nodeW, h: nodeH });
+      return y + nodeH / 2; // Return center Y
+    }
+
+    // Internal node: position children first, then center on them
+    let minChildY = Infinity;
+    let maxChildY = -Infinity;
+
+    for (const cid of children) {
+      const childCol = layerById.get(cid);
+      if (childCol !== undefined) {
+        const childCenterY = positionNode(cid, childCol);
+        minChildY = Math.min(minChildY, childCenterY);
+        maxChildY = Math.max(maxChildY, childCenterY);
+      }
+    }
+
+    // Center parent on children
+    const centerY = (minChildY + maxChildY) / 2;
+    const y = centerY - nodeH / 2;
+    pos.set(nodeId, { x, y: Math.round(Math.max(pad, Math.min(h - pad - nodeH, y))), w: nodeW, h: nodeH });
+    return centerY;
+  }
+
+  // Position each root and its subtree
+  for (const root of roots) {
+    const col = layerById.get(root.id);
+    if (col !== undefined) {
+      positionNode(root.id, col);
+    }
+  }
+
+  // Position any orphan nodes (not in tree structure) using layer order
   for (let c = 0; c < layers.length; c++) {
     const col = layers[c];
-    for (let r = 0; r < col.length; r++) {
-      const n = col[r];
-      const x = pad + c * (nodeW + colGap);
-      const y = pad + r * (nodeH + rowGap);
-      pos.set(n.id, { x, y, w: nodeW, h: nodeH });
+    const unpositioned = col.filter(n => n && n.id && !pos.has(n.id));
+    if (unpositioned.length === 0) continue;
+
+    // Spread unpositioned nodes evenly in available space
+    const positioned = col.filter(n => n && n.id && pos.has(n.id));
+    let availableSlots = [];
+
+    if (positioned.length === 0) {
+      // No positioned nodes - spread evenly
+      const spacing = availH / (unpositioned.length + 1);
+      for (let i = 0; i < unpositioned.length; i++) {
+        availableSlots.push(pad + (i + 1) * spacing - nodeH / 2);
+      }
+    } else {
+      // Find gaps between positioned nodes
+      const sortedY = positioned.map(n => pos.get(n.id).y).sort((a, b) => a - b);
+      // Add slots between and around positioned nodes
+      if (sortedY[0] > pad + nodeH + minVGap) {
+        availableSlots.push(pad);
+      }
+      for (let i = 0; i < sortedY.length - 1; i++) {
+        const gap = sortedY[i + 1] - sortedY[i] - nodeH;
+        if (gap > nodeH + minVGap * 2) {
+          availableSlots.push(sortedY[i] + nodeH + gap / 2 - nodeH / 2);
+        }
+      }
+      if (sortedY[sortedY.length - 1] + nodeH < h - pad - nodeH - minVGap) {
+        availableSlots.push(h - pad - nodeH);
+      }
+    }
+
+    // Assign available slots to unpositioned nodes
+    for (let i = 0; i < unpositioned.length; i++) {
+      const n = unpositioned[i];
+      const slotIdx = Math.min(i, availableSlots.length - 1);
+      const y = availableSlots.length > 0 ? availableSlots[slotIdx] : pad + i * (nodeH + minVGap);
+      pos.set(n.id, { x: colX(c), y: Math.round(y), w: nodeW, h: nodeH });
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // OVERLAP RESOLUTION: Ensure no nodes overlap within columns
+  // ═══════════════════════════════════════════════════════════════════════════
+  for (let c = 0; c < layers.length; c++) {
+    const col = layers[c].filter(n => n && n.id && pos.has(n.id));
+    if (col.length < 2) continue;
+
+    // Sort by Y position
+    const sorted = col.map(n => ({ id: n.id, p: pos.get(n.id) })).sort((a, b) => a.p.y - b.p.y);
+
+    // Push overlapping nodes down
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = sorted[i - 1].p;
+      const curr = sorted[i].p;
+      const minY = prev.y + nodeH + minVGap;
+      if (curr.y < minY) {
+        curr.y = Math.round(minY);
+      }
+    }
+
+    // If last node exceeds bounds, compress everything
+    const last = sorted[sorted.length - 1].p;
+    if (last.y + nodeH > h - pad) {
+      const overflow = (last.y + nodeH) - (h - pad);
+      const shrinkPer = overflow / sorted.length;
+      for (let i = 0; i < sorted.length; i++) {
+        sorted[i].p.y = Math.round(Math.max(pad, sorted[i].p.y - shrinkPer * (sorted.length - i)));
+      }
     }
   }
 
@@ -713,7 +1217,7 @@ function buildGraph(snapshot, selectedId) {
   }
 
   assignEdgeSlots(edges);
-  return { nodes, byId, pos, edges, w, h, selectedId, nextId };
+  return { nodes, byId, pos, edges, w, h, selectedId, nextId, scale };
 }
 
 function ensureSvg() {
@@ -872,9 +1376,16 @@ function computeFitView(graph) {
 }
 
 function fitToGraph({ animate = true } = {}) {
-  if (!lastGraph) return;
-  fitView = computeFitView(lastGraph);
-  setViewBox(fitView, { animate });
+  if (!cy) return;
+  if (animate) {
+    cy.animate({
+      fit: { padding: 40 },
+      duration: 250,
+      easing: "ease-out"
+    });
+  } else {
+    cy.fit(null, 40);
+  }
 }
 
 function zoomAtClientPoint({ clientX, clientY, factor }) {
@@ -904,20 +1415,28 @@ function zoomAtCenter(factor) {
 }
 
 function centerNodeIfOffscreen(nodeId) {
-  if (!nodeId || !lastGraph || !viewBox) return;
-  const p = lastGraph.pos.get(nodeId);
-  if (!p) return;
-  const pad = 40;
+  if (!nodeId || !cy) return;
+  const cyNode = cy.getElementById(nodeId);
+  if (!cyNode.length) return;
+
+  // Check if node is within the viewport
+  const extent = cy.extent();
+  const pos = cyNode.position();
+  const pad = 40 / cy.zoom(); // Convert padding to model coordinates
+
   const inView =
-    p.x >= viewBox.x + pad &&
-    p.y >= viewBox.y + pad &&
-    p.x + p.w <= viewBox.x + viewBox.w - pad &&
-    p.y + p.h <= viewBox.y + viewBox.h - pad;
-  if (inView) return;
-  const cx = p.x + p.w / 2;
-  const cy = p.y + p.h / 2;
-  const next = { x: cx - viewBox.w / 2, y: cy - viewBox.h / 2, w: viewBox.w, h: viewBox.h };
-  setViewBox(next, { animate: true });
+    pos.x >= extent.x1 + pad &&
+    pos.y >= extent.y1 + pad &&
+    pos.x <= extent.x2 - pad &&
+    pos.y <= extent.y2 - pad;
+
+  if (!inView) {
+    cy.animate({
+      center: { eles: cyNode },
+      duration: 250,
+      easing: "ease-out"
+    });
+  }
 }
 
 function renderGraph(graph) {
@@ -980,6 +1499,7 @@ function renderGraph(graph) {
   }
 
   const seenNodes = new Set();
+  const scale = graph.scale || 1;
   for (const n of graph.nodes) {
     if (!n || !n.id) continue;
     const p = graph.pos.get(n.id);
@@ -992,44 +1512,80 @@ function renderGraph(graph) {
       g.dataset.nodeId = id;
       g.addEventListener("click", () => selectNode(id));
 
+      // Create clipPath for text clipping
+      const clipId = "clip-" + id.replace(/[^a-zA-Z0-9]/g, "_");
+      const clipPath = document.createElementNS(ns, "clipPath");
+      clipPath.setAttribute("id", clipId);
+      const clipRect = document.createElementNS(ns, "rect");
+      clipRect.setAttribute("x", "0");
+      clipRect.setAttribute("y", "0");
+      clipPath.appendChild(clipRect);
+
       const r = document.createElementNS(ns, "rect");
       r.setAttribute("x", "0");
       r.setAttribute("y", "0");
-      r.setAttribute("rx", "10");
-      r.setAttribute("ry", "10");
-      r.setAttribute("width", String(p.w));
-      r.setAttribute("height", String(p.h));
 
       const dot = document.createElementNS(ns, "circle");
-      dot.setAttribute("cx", "12");
-      dot.setAttribute("cy", "16");
-      dot.setAttribute("r", "4");
       dot.setAttribute("class", "nodeDot");
 
+      // Text container with clipping
+      const textGroup = document.createElementNS(ns, "g");
+      textGroup.setAttribute("clip-path", "url(#" + clipId + ")");
+
       const t1 = document.createElementNS(ns, "text");
-      t1.setAttribute("x", "22");
-      t1.setAttribute("y", "18");
       t1.setAttribute("class", "nodeId");
       t1.setAttribute("font-weight", "600");
 
       const t2 = document.createElementNS(ns, "text");
-      t2.setAttribute("x", "12");
-      t2.setAttribute("y", "38");
       t2.setAttribute("class", "nodeSub");
 
+      textGroup.appendChild(t1);
+      textGroup.appendChild(t2);
+
+      g.appendChild(clipPath);
       g.appendChild(r);
       g.appendChild(dot);
-      g.appendChild(t1);
-      g.appendChild(t2);
+      g.appendChild(textGroup);
       nodesLayer.appendChild(g);
 
       g.addEventListener("mouseenter", (ev) => showNodeTooltip(id, ev));
       g.addEventListener("mousemove", (ev) => moveNodeTooltip(ev));
       g.addEventListener("mouseleave", () => hideNodeTooltip());
 
-      view = { g, r, dot, t1, t2 };
+      view = { g, r, dot, t1, t2, clipRect };
       nodeElById.set(id, view);
     }
+
+    // Update dynamic sizes based on scale
+    const rx = Math.round(8 * scale);
+    view.r.setAttribute("rx", String(rx));
+    view.r.setAttribute("ry", String(rx));
+    view.r.setAttribute("width", String(p.w));
+    view.r.setAttribute("height", String(p.h));
+
+    // Update clip rect to match node size (with padding)
+    if (view.clipRect) {
+      view.clipRect.setAttribute("width", String(p.w - 8));
+      view.clipRect.setAttribute("height", String(p.h));
+    }
+
+    // Scale dot position and size
+    const dotX = Math.round(10 * scale);
+    const dotY = Math.round(p.h * 0.32);
+    view.dot.setAttribute("cx", String(dotX));
+    view.dot.setAttribute("cy", String(dotY));
+    view.dot.setAttribute("r", String(Math.max(3, Math.round(4 * scale))));
+
+    // Scale text positions and font sizes - position relative to node height
+    const fontSize1 = Math.max(10, Math.round(12 * scale));
+    const fontSize2 = Math.max(9, Math.round(10 * scale));
+    const textX = Math.round(20 * scale);
+    view.t1.setAttribute("x", String(textX));
+    view.t1.setAttribute("y", String(Math.round(p.h * 0.36)));
+    view.t1.setAttribute("font-size", String(fontSize1));
+    view.t2.setAttribute("x", String(Math.round(10 * scale)));
+    view.t2.setAttribute("y", String(Math.round(p.h * 0.72)));
+    view.t2.setAttribute("font-size", String(fontSize2));
 
     const st = statusDotClass(n);
     view.g.setAttribute(
@@ -1362,14 +1918,13 @@ async function updateSelection() {
 function selectNode(id) {
   selectedNodeId = id || "";
   if (lastSnapshot) render(lastSnapshot);
-  if (selectedNodeId) {
+  if (selectedNodeId && cy) {
     centerNodeIfOffscreen(selectedNodeId);
-    // Pulse animation
-    const view = nodeElById.get(selectedNodeId);
-    if (view && view.g) {
-      view.g.classList.remove("select-pulse");
-      requestAnimationFrame(() => view.g.classList.add("select-pulse"));
-      setTimeout(() => view.g.classList.remove("select-pulse"), 250);
+    // Select the node in Cytoscape
+    cy.nodes().unselect();
+    const cyNode = cy.getElementById(selectedNodeId);
+    if (cyNode.length) {
+      cyNode.select();
     }
   }
 }
@@ -1407,18 +1962,13 @@ function render(snapshot) {
   if (!selectedNodeId) {
     selectedNodeId = (snapshot.next && snapshot.next.id) ? snapshot.next.id : ((nodes[0] && nodes[0].id) ? nodes[0].id : "");
   }
-  const graph = buildGraph(snapshot, selectedNodeId);
-  lastGraph = graph;
-  renderGraph(graph);
+
+  // Use Cytoscape for rendering
+  renderCytoscape(snapshot);
   updateSelection();
-  fitView = computeFitView(graph);
-  if (!viewBox || !userMovedView) setViewBox(fitView, { animate: false });
-  else setViewBox(viewBox, { animate: false });
+
+  // Apply visual overlays (search/filter)
   applyVisualOverlays();
-  if (selectedNodeId && selectedNodeId !== lastAutoScrollId) {
-    lastAutoScrollId = selectedNodeId;
-    centerNodeIfOffscreen(selectedNodeId);
-  }
 }
 
 btnPause.onclick = () => withLoading(btnPause, async () => {
@@ -1508,43 +2058,55 @@ function renderSessionsList() {
   for (const s of list) {
     const id = s && s.id ? String(s.id) : "";
     if (!id) continue;
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "runItem stagger" + (id === selectedSessionId ? " active" : "");
-    btn.style.animationDelay = (staggerIdx * 30) + "ms";
-    staggerIdx++;
     const isCurrent = Boolean(s?.current);
     const hasDb = Boolean(s?.hasDb);
     const label =
       (isCurrent ? "* " : "") +
       id +
       (hasDb ? "" : "  [uninitialized]");
+
+    const row = document.createElement("div");
+    row.className = "runRow stagger";
+    row.style.animationDelay = (staggerIdx * 30) + "ms";
+    staggerIdx++;
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "runItem" + (isCurrent ? " active" : "");
     btn.textContent = truncateText(label, 72);
-    btn.onclick = () => selectSession(id);
-    elRunsList.appendChild(btn);
+    btn.title = isCurrent ? "Current session" : "Click to switch to this session";
+    btn.onclick = () => {
+      if (isCurrent) return;
+      switchSession(id);
+    };
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "runDeleteBtn";
+    del.title = "Delete session";
+    del.innerHTML = "🗑";
+    del.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      deleteSession(id);
+    };
+
+    row.appendChild(btn);
+    row.appendChild(del);
+    elRunsList.appendChild(row);
   }
 }
 
-async function selectSession(sessionId) {
-  const id = String(sessionId || "").trim();
-  if (!id) return;
-  selectedSessionId = id;
-  renderSessionsList();
-  updateSwitchButton();
-  try {
-    const selected = Array.isArray(sessions) ? sessions.find((s) => s && String(s.id) === id) : null;
-    const isCurrent = Boolean(selected?.current);
-    const hasDb = Boolean(selected?.hasDb);
-    if (elRunMeta) elRunMeta.textContent = (isCurrent ? "current session: " : "selected session: ") + id;
-    if (elRunLog) {
-      elRunLog.textContent =
-        (hasDb ? "status: initialized\n" : "status: uninitialized\n") +
-        "action: press Switch to load this session in the UI\n";
-      elRunLog.scrollTop = elRunLog.scrollHeight;
-    }
-  } catch (e) {
-    if (elRunMeta) elRunMeta.textContent = "session: " + id;
-    if (elRunLog) elRunLog.textContent = String((e && e.message) ? e.message : e);
+function renderSessionsMeta() {
+  const selected = Array.isArray(sessions) ? sessions.find((s) => s && s.current) : null;
+  const id = selected && selected.id ? String(selected.id) : "";
+  const hasDb = Boolean(selected?.hasDb);
+  if (elRunMeta) elRunMeta.textContent = id ? ("current session: " + id) : "current session: (none)";
+  if (elRunLog) {
+    elRunLog.textContent =
+      (id ? ("status: " + (hasDb ? "initialized" : "uninitialized") + "\n") : "") +
+      "action: click a session to switch; trash deletes\n";
+    elRunLog.scrollTop = elRunLog.scrollHeight;
   }
 }
 
@@ -1553,9 +2115,8 @@ async function refreshSessions() {
     const data = await fetchSessions();
     sessions = Array.isArray(data && data.sessions) ? data.sessions : [];
     currentSessionId = typeof data?.currentId === "string" ? data.currentId : "";
-    if (!selectedSessionId && currentSessionId) selectedSessionId = currentSessionId;
     renderSessionsList();
-    if (selectedSessionId) await selectSession(selectedSessionId);
+    renderSessionsMeta();
   } catch (e) {
     sessions = [];
     const msg = String((e && e.message) ? e.message : e);
@@ -1573,27 +2134,32 @@ async function refreshSessions() {
 async function switchSession(sessionId) {
   const id = String(sessionId || "").trim();
   if (!id) return;
-  const ok = await showConfirm("Switch to session " + truncateText(id, 48) + "?");
-  if (!ok) return;
   const doSwitch = async () => {
     await postJson("/api/sessions/select", { id });
     window.location.reload();
   };
   try {
-    if (btnDeleteRun) {
-      await withLoading(btnDeleteRun, doSwitch);
-    } else {
-      await doSwitch();
-    }
+    await doSwitch();
   } catch (err) {
     toast(String(err?.message || err || "Failed to switch session"), "error");
   }
 }
 
-function updateSwitchButton() {
-  if (!btnDeleteRun) return;
-  const id = String(selectedSessionId || "").trim();
-  btnDeleteRun.disabled = !id || (currentSessionId && id === currentSessionId);
+async function deleteSession(sessionId) {
+  const id = String(sessionId || "").trim();
+  if (!id) return;
+  const msg =
+    id === currentSessionId
+      ? ("Delete current session " + truncateText(id, 48) + "?\nA new session will be created and selected.")
+      : ("Delete session " + truncateText(id, 48) + "?");
+  const ok = await showConfirm(msg);
+  if (!ok) return;
+  try {
+    await postJson("/api/sessions/delete", { id });
+    window.location.reload();
+  } catch (err) {
+    toast(String(err?.message || err || "Failed to delete session"), "error");
+  }
 }
 
 async function clearChat() {
@@ -1640,25 +2206,32 @@ async function createSession() {
   }
 }
 
-if (btnDeleteRun) btnDeleteRun.onclick = () => switchSession(selectedSessionId);
 if (btnClearChat) btnClearChat.onclick = () => clearChat();
 if (btnStartRun) btnStartRun.onclick = () => createSession();
 if (btnToggleRuns) btnToggleRuns.onclick = () => toggleRunsPane();
 
-btnFit.onclick = () => fitToGraph({ animate: true });
-btnZoomOut.onclick = () => zoomAtCenter(1.25);
-btnZoomIn.onclick = () => zoomAtCenter(0.8);
+btnFit.onclick = () => {
+  if (cy) cy.fit(null, 40);
+};
+btnZoomOut.onclick = () => {
+  if (cy) cy.zoom(cy.zoom() * 0.8);
+};
+btnZoomIn.onclick = () => {
+  if (cy) cy.zoom(cy.zoom() * 1.25);
+};
 
 /* ── Zoom slider ──────────────────────────────────────────────────────── */
 
 if (elZoomSlider) {
   elZoomSlider.addEventListener("input", () => {
-    if (!fitView || !viewBox) return;
+    if (!cy) return;
     const targetPct = Number(elZoomSlider.value) || 100;
-    const currentPct = fitView.w > 0 && viewBox.w > 0 ? (fitView.w / viewBox.w) * 100 : 100;
-    if (Math.abs(targetPct - currentPct) < 1) return;
-    const factor = currentPct / targetPct;
-    zoomAtCenter(factor);
+    const newZoom = targetPct / 100;
+    cy.zoom({
+      level: newZoom,
+      renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 }
+    });
+    updateZoomDisplay();
   });
 }
 
@@ -1669,44 +2242,61 @@ if (elZoomPill) {
     if (!input) return;
     const targetPct = Number(input);
     if (!Number.isFinite(targetPct) || targetPct < 25 || targetPct > 400) return;
-    if (!fitView || !viewBox) return;
-    const currentPct = fitView.w > 0 && viewBox.w > 0 ? (fitView.w / viewBox.w) * 100 : 100;
-    const factor = currentPct / targetPct;
-    zoomAtCenter(factor);
+    if (!cy) return;
+    const newZoom = targetPct / 100;
+    cy.zoom({
+      level: newZoom,
+      renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 }
+    });
+    updateZoomDisplay();
   });
+}
+
+function updateZoomDisplay() {
+  if (!cy) return;
+  const zoomPct = Math.round(cy.zoom() * 100);
+  if (elZoomPct) elZoomPct.textContent = zoomPct + "%";
+  if (elZoomSlider) elZoomSlider.value = zoomPct;
 }
 
 /* ── Node search ──────────────────────────────────────────────────────── */
 
 function applyNodeSearch() {
-  if (!lastGraph) return;
+  if (!cy || !lastSnapshot) return;
   const q = nodeSearchQuery.toLowerCase();
-  for (const n of lastGraph.nodes) {
-    if (!n || !n.id) continue;
-    const view = nodeElById.get(n.id);
-    if (!view) continue;
-    if (!q) {
-      view.g.classList.remove("search-dimmed");
-      continue;
+  const nodes = Array.isArray(lastSnapshot.nodes) ? lastSnapshot.nodes : [];
+
+  cy.batch(() => {
+    for (const n of nodes) {
+      if (!n || !n.id) continue;
+      const cyNode = cy.$id(n.id);
+      if (!cyNode.length) continue;
+
+      if (!q) {
+        cyNode.removeClass("dimmed");
+        continue;
+      }
+      const haystack = ((n.id || "") + " " + (n.type || "") + " " + (n.title || "")).toLowerCase();
+      const match = haystack.includes(q);
+      if (match) {
+        cyNode.removeClass("dimmed");
+      } else {
+        cyNode.addClass("dimmed");
+      }
     }
-    const haystack = ((n.id || "") + " " + (n.type || "") + " " + (n.title || "")).toLowerCase();
-    const match = haystack.includes(q);
-    view.g.classList.toggle("search-dimmed", !match);
-  }
-  // Dim edges connected to dimmed nodes
-  for (const [key, pathEl] of edgeElByKey.entries()) {
-    if (!q) { pathEl.classList.remove("search-dimmed"); continue; }
-    const parts = key.split("->");
-    const kindAndFrom = parts[0] || "";
-    const to = parts[1] || "";
-    const kindEnd = kindAndFrom.indexOf(":");
-    const from = kindEnd >= 0 ? kindAndFrom.slice(kindEnd + 1) : "";
-    const fromView = nodeElById.get(from);
-    const toView = nodeElById.get(to);
-    const fromDimmed = fromView && fromView.g.classList.contains("search-dimmed");
-    const toDimmed = toView && toView.g.classList.contains("search-dimmed");
-    pathEl.classList.toggle("search-dimmed", Boolean(fromDimmed && toDimmed));
-  }
+
+    // Dim edges connected to dimmed nodes
+    cy.edges().forEach(edge => {
+      if (!q) { edge.removeClass("dimmed"); return; }
+      const source = cy.$id(edge.data("source"));
+      const target = cy.$id(edge.data("target"));
+      if ((source.length && source.hasClass("dimmed")) || (target.length && target.hasClass("dimmed"))) {
+        edge.addClass("dimmed");
+      } else {
+        edge.removeClass("dimmed");
+      }
+    });
+  });
 }
 
 if (elNodeSearch) {
@@ -1727,30 +2317,40 @@ if (elNodeSearch) {
 /* ── Status filter chips ──────────────────────────────────────────────── */
 
 function applyStatusFilter() {
-  if (!lastGraph) return;
+  if (!cy || !lastSnapshot) return;
   const hasFilter = activeStatusFilters.size > 0;
-  for (const n of lastGraph.nodes) {
-    if (!n || !n.id) continue;
-    const view = nodeElById.get(n.id);
-    if (!view) continue;
-    if (!hasFilter) { view.g.classList.remove("filter-dimmed"); continue; }
-    const st = statusKey(n);
-    const match = activeStatusFilters.has(st);
-    view.g.classList.toggle("filter-dimmed", !match);
-  }
-  for (const [key, pathEl] of edgeElByKey.entries()) {
-    if (!hasFilter) { pathEl.classList.remove("filter-dimmed"); continue; }
-    const parts = key.split("->");
-    const kindAndFrom = parts[0] || "";
-    const to = parts[1] || "";
-    const kindEnd = kindAndFrom.indexOf(":");
-    const from = kindEnd >= 0 ? kindAndFrom.slice(kindEnd + 1) : "";
-    const fromView = nodeElById.get(from);
-    const toView = nodeElById.get(to);
-    const fromDimmed = fromView && fromView.g.classList.contains("filter-dimmed");
-    const toDimmed = toView && toView.g.classList.contains("filter-dimmed");
-    pathEl.classList.toggle("filter-dimmed", Boolean(fromDimmed && toDimmed));
-  }
+  const nodes = Array.isArray(lastSnapshot.nodes) ? lastSnapshot.nodes : [];
+
+  cy.batch(() => {
+    for (const n of nodes) {
+      if (!n || !n.id) continue;
+      const cyNode = cy.$id(n.id);
+      if (!cyNode.length) continue;
+
+      if (!hasFilter) {
+        cyNode.removeClass("filter-dimmed");
+        continue;
+      }
+      const st = statusKey(n);
+      const match = activeStatusFilters.has(st);
+      if (match) {
+        cyNode.removeClass("filter-dimmed");
+      } else {
+        cyNode.addClass("filter-dimmed");
+      }
+    }
+
+    cy.edges().forEach(edge => {
+      if (!hasFilter) { edge.removeClass("filter-dimmed"); return; }
+      const source = cy.$id(edge.data("source"));
+      const target = cy.$id(edge.data("target"));
+      if ((source.length && source.hasClass("filter-dimmed")) && (target.length && target.hasClass("filter-dimmed"))) {
+        edge.addClass("filter-dimmed");
+      } else {
+        edge.removeClass("filter-dimmed");
+      }
+    });
+  });
 }
 
 if (elFilterChips) {
@@ -1781,28 +2381,32 @@ if (btnHideDone) {
 }
 
 function applyHideDone() {
-  if (!lastGraph) return;
-  for (const n of lastGraph.nodes) {
-    if (!n || !n.id) continue;
-    const view = nodeElById.get(n.id);
-    if (!view) continue;
-    const isDone = statusKey(n) === "done";
-    const shouldHide = hideDoneActive && isDone && selectedNodeId !== n.id;
-    view.g.style.display = shouldHide ? "none" : "";
-  }
-  for (const [key, pathEl] of edgeElByKey.entries()) {
-    if (!hideDoneActive) { pathEl.style.display = ""; continue; }
-    const parts = key.split("->");
-    const to = parts[1] || "";
-    const kindAndFrom = parts[0] || "";
-    const kindEnd = kindAndFrom.indexOf(":");
-    const from = kindEnd >= 0 ? kindAndFrom.slice(kindEnd + 1) : "";
-    const fromNode = lastGraph.byId.get(from);
-    const toNode = lastGraph.byId.get(to);
-    const fromDone = fromNode && statusKey(fromNode) === "done" && selectedNodeId !== from;
-    const toDone = toNode && statusKey(toNode) === "done" && selectedNodeId !== to;
-    pathEl.style.display = (fromDone && toDone) ? "none" : "";
-  }
+  if (!lastSnapshot || !cy) return;
+  const nodes = Array.isArray(lastSnapshot.nodes) ? lastSnapshot.nodes : [];
+  cy.batch(() => {
+    for (const n of nodes) {
+      if (!n || !n.id) continue;
+      const cyNode = cy.getElementById(n.id);
+      if (!cyNode.length) continue;
+      const isDone = statusKey(n) === "done";
+      const shouldHide = hideDoneActive && isDone && selectedNodeId !== n.id;
+      if (shouldHide) {
+        cyNode.addClass("hidden-done");
+      } else {
+        cyNode.removeClass("hidden-done");
+      }
+    }
+    // Hide edges where both endpoints are hidden
+    cy.edges().forEach(edge => {
+      const source = edge.source();
+      const target = edge.target();
+      if (source.hasClass("hidden-done") && target.hasClass("hidden-done")) {
+        edge.addClass("hidden-done");
+      } else {
+        edge.removeClass("hidden-done");
+      }
+    });
+  });
 }
 
 /* ── Minimap ──────────────────────────────────────────────────────────── */
@@ -1816,15 +2420,21 @@ const minimapColors = {
 };
 
 function drawMinimap() {
-  if (!elMinimap || !lastGraph || !lastGraph.pos.size) return;
+  if (!elMinimap || !cy) return;
   const ctx = elMinimap.getContext("2d");
   if (!ctx) return;
+
+  const nodes = cy.nodes();
+  if (nodes.length === 0) return;
+
   const cw = elMinimap.width;
   const ch = elMinimap.height;
   ctx.clearRect(0, 0, cw, ch);
 
-  const gw = Math.max(1, lastGraph.w);
-  const gh = Math.max(1, lastGraph.h);
+  // Get bounding box of all nodes
+  const bb = cy.elements().boundingBox();
+  const gw = Math.max(1, bb.w);
+  const gh = Math.max(1, bb.h);
   const pad = 6;
   const scaleX = (cw - pad * 2) / gw;
   const scaleY = (ch - pad * 2) / gh;
@@ -1836,41 +2446,37 @@ function drawMinimap() {
   // Draw edges
   ctx.strokeStyle = "rgba(255,255,255,0.08)";
   ctx.lineWidth = 0.5;
-  for (const e of lastGraph.edges) {
-    const a = lastGraph.pos.get(e.from);
-    const b = lastGraph.pos.get(e.to);
-    if (!a || !b) continue;
+  cy.edges().forEach(edge => {
+    const srcPos = edge.source().position();
+    const tgtPos = edge.target().position();
     ctx.beginPath();
-    ctx.moveTo(offsetX + (a.x + a.w) * scale, offsetY + (a.y + a.h / 2) * scale);
-    ctx.lineTo(offsetX + b.x * scale, offsetY + (b.y + b.h / 2) * scale);
+    ctx.moveTo(offsetX + (srcPos.x - bb.x1) * scale, offsetY + (srcPos.y - bb.y1) * scale);
+    ctx.lineTo(offsetX + (tgtPos.x - bb.x1) * scale, offsetY + (tgtPos.y - bb.y1) * scale);
     ctx.stroke();
-  }
+  });
 
   // Draw nodes as dots
-  for (const n of lastGraph.nodes) {
-    if (!n || !n.id) continue;
-    const p = lastGraph.pos.get(n.id);
-    if (!p) continue;
-    const st = statusKey(n);
+  nodes.forEach(node => {
+    const pos = node.position();
+    const st = node.data("status") || "open";
     ctx.fillStyle = minimapColors[st] || "#555555";
-    const cx = offsetX + (p.x + p.w / 2) * scale;
-    const cy = offsetY + (p.y + p.h / 2) * scale;
-    const r = Math.max(2, Math.min(4, p.w * scale * 0.15));
+    const cx = offsetX + (pos.x - bb.x1) * scale;
+    const cy2 = offsetY + (pos.y - bb.y1) * scale;
+    const r = Math.max(2, Math.min(4, 3));
     ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.arc(cx, cy2, r, 0, Math.PI * 2);
     ctx.fill();
-  }
+  });
 
   // Draw viewport rectangle
-  if (viewBox) {
-    ctx.strokeStyle = "rgba(255,255,255,0.6)";
-    ctx.lineWidth = 1;
-    const vx = offsetX + viewBox.x * scale;
-    const vy = offsetY + viewBox.y * scale;
-    const vw = viewBox.w * scale;
-    const vh = viewBox.h * scale;
-    ctx.strokeRect(vx, vy, vw, vh);
-  }
+  const ext = cy.extent();
+  ctx.strokeStyle = "rgba(255,255,255,0.6)";
+  ctx.lineWidth = 1;
+  const vx = offsetX + (ext.x1 - bb.x1) * scale;
+  const vy = offsetY + (ext.y1 - bb.y1) * scale;
+  const vw = ext.w * scale;
+  const vh = ext.h * scale;
+  ctx.strokeRect(vx, vy, vw, vh);
 }
 
 // Minimap click/drag navigation
@@ -1878,29 +2484,28 @@ if (elMinimap) {
   let minimapDragging = false;
 
   function minimapNavigate(ev) {
-    if (!lastGraph || !viewBox) return;
+    if (!cy) return;
+    const nodes = cy.nodes();
+    if (nodes.length === 0) return;
+
     const rect = elMinimap.getBoundingClientRect();
     const mx = ev.clientX - rect.left;
     const my = ev.clientY - rect.top;
     const cw = elMinimap.width;
     const ch = elMinimap.height;
-    const gw = Math.max(1, lastGraph.w);
-    const gh = Math.max(1, lastGraph.h);
+    const bb = cy.elements().boundingBox();
+    const gw = Math.max(1, bb.w);
+    const gh = Math.max(1, bb.h);
     const pad = 6;
     const scaleX = (cw - pad * 2) / gw;
     const scaleY = (ch - pad * 2) / gh;
     const scale = Math.min(scaleX, scaleY);
     const offsetX = pad + (cw - pad * 2 - gw * scale) / 2;
     const offsetY = pad + (ch - pad * 2 - gh * scale) / 2;
-    const worldX = (mx - offsetX) / scale;
-    const worldY = (my - offsetY) / scale;
-    userMovedView = true;
-    setViewBox({
-      x: worldX - viewBox.w / 2,
-      y: worldY - viewBox.h / 2,
-      w: viewBox.w,
-      h: viewBox.h,
-    }, { animate: false });
+    const worldX = bb.x1 + (mx - offsetX) / scale;
+    const worldY = bb.y1 + (my - offsetY) / scale;
+    cy.center({ x: worldX, y: worldY });
+    drawMinimap();
   }
 
   elMinimap.addEventListener("pointerdown", (ev) => {
@@ -1916,74 +2521,20 @@ if (elMinimap) {
   elMinimap.addEventListener("pointercancel", () => { minimapDragging = false; });
 }
 
-// Redraw minimap whenever viewBox changes
-const _origSetViewBox = setViewBox;
-setViewBox = function(next, opts) {
-  _origSetViewBox(next, opts);
-  drawMinimap();
-};
-
-let panning = false;
-let panStart = null;
-elGraphWrap.addEventListener("pointerdown", (ev) => {
-  if (!viewBox) return;
-  if (ev.button !== 0) return;
-  const target = ev.target;
-  if (target && typeof target.closest === "function" && target.closest(".node")) return;
-  panning = true;
-  panStart = { x: ev.clientX, y: ev.clientY, vb: { ...viewBox } };
-  userMovedView = true;
-  try {
-    elGraphWrap.setPointerCapture(ev.pointerId);
-  } catch {
-    // ignore
-  }
-  elGraphWrap.classList.add("grabbing");
-});
-elGraphWrap.addEventListener("pointermove", (ev) => {
-  if (!panning || !panStart || !viewBox || !elGraph) return;
-  const rect = elGraph.getBoundingClientRect();
-  const dx = ev.clientX - panStart.x;
-  const dy = ev.clientY - panStart.y;
-  const dw = rect.width > 0 ? (dx / rect.width) * panStart.vb.w : 0;
-  const dh = rect.height > 0 ? (dy / rect.height) * panStart.vb.h : 0;
-  setViewBox(
-    {
-      x: panStart.vb.x - dw,
-      y: panStart.vb.y - dh,
-      w: panStart.vb.w,
-      h: panStart.vb.h,
-    },
-    { animate: false },
-  );
-});
-function endPan() {
-  panning = false;
-  panStart = null;
-  elGraphWrap.classList.remove("grabbing");
-}
-elGraphWrap.addEventListener("pointerup", endPan);
-elGraphWrap.addEventListener("pointercancel", endPan);
-elGraphWrap.addEventListener(
-  "wheel",
-  (ev) => {
-    if (!viewBox) return;
-    ev.preventDefault();
-    const dy = Number(ev.deltaY || 0);
-    const factor = Math.pow(1.0016, dy);
-    zoomAtClientPoint({ clientX: ev.clientX, clientY: ev.clientY, factor });
-  },
-  { passive: false },
-);
-
+// Resize observer for Cytoscape container
 if (typeof ResizeObserver !== "undefined") {
+  let resizeTimer = null;
   const ro = new ResizeObserver(() => {
-    if (!lastGraph) return;
-    fitView = computeFitView(lastGraph);
-    if (!viewBox || !userMovedView) setViewBox(fitView, { animate: false });
-    updateZoomPct();
+    // Debounce resize to avoid excessive rebuilds
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      if (!cy) return;
+      cy.resize();
+      cy.fit(null, 40);
+      drawMinimap();
+    }, 100);
   });
-  ro.observe(elGraphWrap);
+  if (elGraphWrap) ro.observe(elGraphWrap);
 }
 
 if (btnChatSend) btnChatSend.onclick = () => sendChat();
@@ -2047,16 +2598,14 @@ function hideNodeTooltip() {
 /* ── Keyboard navigation ──────────────────────────────────────────────── */
 
 function getNodeIdList() {
-  if (!lastGraph) return [];
-  return lastGraph.nodes.filter((n) => n && n.id).map((n) => n.id);
+  if (!cy) return [];
+  return cy.nodes().map(node => node.id());
 }
 
 function focusNodeById(id) {
   keyboardFocusId = id || "";
   if (lastSnapshot) {
-    const graph = buildGraph(lastSnapshot, selectedNodeId);
-    lastGraph = graph;
-    renderGraph(graph);
+    renderCytoscape(lastSnapshot);
   }
   if (keyboardFocusId) centerNodeIfOffscreen(keyboardFocusId);
 }
@@ -2154,13 +2703,13 @@ document.addEventListener("keydown", (ev) => {
 
   if (ev.key === "+" || ev.key === "=") {
     ev.preventDefault();
-    zoomAtCenter(0.8);
+    if (cy) cy.zoom(cy.zoom() * 1.25);
     return;
   }
 
   if (ev.key === "-") {
     ev.preventDefault();
-    zoomAtCenter(1.25);
+    if (cy) cy.zoom(cy.zoom() * 0.8);
     return;
   }
 
@@ -2581,7 +3130,7 @@ es.addEventListener("open", () => {
 es.onmessage = (ev) => {
   connErrors = 0;
   setConnState("connected");
-  try { renderIncremental(JSON.parse(ev.data)); } catch {}
+  try { render(JSON.parse(ev.data)); } catch (err) { console.error("[SSE] render failed:", err); }
 };
 es.onerror = () => {
   connErrors++;

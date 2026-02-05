@@ -4412,7 +4412,9 @@ async function chatEntryCommand(rootDir, flags) {
 async function uiCommand(rootDir, flags) {
   await ensureSessionLayout(rootDir);
   const paths = dagainPaths(rootDir);
-  if (!(await pathExists(paths.dbPath))) throw new Error("Missing state.sqlite. Run `dagain init`.");
+  if (!(await pathExists(paths.dbPath))) {
+    await initCommand(rootDir, { ...flags, "no-refine": true, noRefine: true, reuse: true });
+  }
 
   const hostRaw = typeof flags.host === "string" ? flags.host : "127.0.0.1";
   const host = String(hostRaw || "").trim() || "127.0.0.1";
@@ -4424,6 +4426,10 @@ async function uiCommand(rootDir, flags) {
 
   const srv = await serveDashboard({ paths, host, port });
   process.stdout.write(`dagain ui listening on ${srv.url}\n`);
+  if (String(process.env.DAGAIN_UI_ONESHOT || "").trim() === "1") {
+    await srv.close();
+    return;
+  }
 
   await new Promise((resolve) => {
     let closed = false;
@@ -4749,19 +4755,19 @@ export async function main(argv) {
     await maybeMigrateLegacyStateDir(rootDir);
   }
 
-	  if (!command || flags.h || flags.help) {
-	    if (flags.h || flags.help || !interactive) {
-	      process.stdout.write(usage());
-	      return;
-	    }
-	    const paths = await resolveChatSessionPaths(rootDir, flags);
-	    if (await pathExists(paths.dbPath)) await chatEntryCommand(rootDir, flags);
-	    else {
-	      await startCommand(rootDir, flags, []);
-	      if (resolvePostChatFlag(flags)) await chatEntryCommand(rootDir, flags);
-	    }
-	    return;
-	  }
+		  if (!command || flags.h || flags.help) {
+		    if (flags.h || flags.help || !interactive) {
+		      process.stdout.write(usage());
+		      return;
+		    }
+		    const paths = await resolveChatSessionPaths(rootDir, flags);
+		    if (!(await pathExists(paths.dbPath))) {
+		      // Chat-first init: avoid interactive goal/config prompts unless explicitly requested.
+		      await initCommand(rootDir, { ...flags, "no-refine": true, noRefine: true, reuse: true });
+		    }
+		    await chatEntryCommand(rootDir, flags);
+		    return;
+		  }
 
   if (command === "start") {
     await startCommand(rootDir, flags, positional);

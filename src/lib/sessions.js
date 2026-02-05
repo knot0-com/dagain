@@ -94,12 +94,27 @@ async function migrateLegacyState(rootDir) {
 async function ensureSymlink(linkPath, targetPath, { type = "file" } = {}) {
   const exists = await pathExists(linkPath);
   if (exists) {
-    try {
-      const st = await lstat(linkPath);
-      if (st.isSymbolicLink()) await rm(linkPath, { force: true });
-      else return;
-    } catch {
-      // ignore
+    const st = await lstat(linkPath).catch(() => null);
+    if (st?.isSymbolicLink()) {
+      await rm(linkPath, { force: true });
+    } else if (st) {
+      // A previous dagain version (or a user/tool) may have replaced the compat link with a real file/dir.
+      // That breaks session switching because the "current session view" can no longer be rewired.
+      //
+      // Only force-rewire when the target is a session-scoped path; otherwise keep existing behavior.
+      const sessionMarker = `${path.sep}sessions${path.sep}`;
+      const shouldRewire = String(targetPath || "").includes(sessionMarker);
+      if (!shouldRewire) return;
+
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      const rand = randomBytes(3).toString("hex");
+      const backupPath = `${linkPath}.bak-${ts}-${rand}`;
+      try {
+        await rename(linkPath, backupPath);
+      } catch (error) {
+        const msg = error?.message || String(error);
+        throw new Error(`Failed to move aside compat path before rewiring: ${linkPath} -> ${backupPath}: ${msg}`);
+      }
     }
   }
   const linkDir = path.dirname(linkPath);

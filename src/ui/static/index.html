@@ -1,3 +1,6 @@
+<!-- Input — served by `src/ui/server.js` with per-request auth token injection and static assets. If this file changes, update this header and the folder Markdown. -->
+<!-- Output — dashboard HTML shell (panes + containers for Cytoscape, chat, details, sessions). If this file changes, update this header and the folder Markdown. -->
+<!-- Position — web UI entrypoint for local dagain monitoring + chat. If this file changes, update this header and the folder Markdown. -->
 <!doctype html>
 <html>
   <head>
@@ -5,6 +8,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>dagain</title>
     <link rel="stylesheet" href="/static/styles.css">
+    <!-- Cytoscape.js for graph visualization -->
+    <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+    <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
   </head>
   <body>
     <script>window.__DAGAIN = { token: "__DAGAIN_TOKEN__" };</script>
@@ -63,13 +70,12 @@
           <h2>Sessions</h2>
           <div style="display:flex; gap:6px;">
             <button class="btn primary" id="startRun" title="Create a new session">New</button>
-            <button class="btn" id="deleteRun" disabled title="Switch to selected session">Switch</button>
           </div>
         </div>
         <div class="cardBody runsPanelBody">
           <div class="runsList mono" id="runsList">(loading)</div>
           <div class="runMeta mono" id="runMeta">select a session</div>
-          <div class="log mono" id="runLog">(tip: sessions isolate goal + memory + runs)</div>
+          <div class="log mono" id="runLog">(tip: click a session to switch; trash deletes)</div>
         </div>
       </aside>
 
@@ -126,7 +132,7 @@
           </div>
           <div class="cardBody">
             <div id="graphWrap">
-              <svg id="graph" role="img" aria-label="dag graph"></svg>
+              <div id="cyGraph"></div>
               <canvas id="minimap" width="160" height="100"></canvas>
             </div>
           </div>

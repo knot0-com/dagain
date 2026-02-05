@@ -1,7 +1,7 @@
 ---
 title: "choreo/src/lib"
 status: active
-date: "2026-02-02"
+date: "2026-02-04"
 parents: ["choreo/src"]
 tags: ["dagain", "runtime", "folder"]
 input: "Core libraries used by CLI/supervisor"

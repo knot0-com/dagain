@@ -1,7 +1,7 @@
 ---
 title: "choreo/test"
 status: active
-date: "2026-02-02"
+date: "2026-02-04"
 parents: ["choreo"]
 tags: ["dagain", "tests", "folder"]
 input: "Node.js test runner and test helpers"
@@ -78,11 +78,13 @@ It covers CLI behavior, DB migrations, scheduling logic, and integrations.
 | `shell-verifier.test.js` | test | Shell verifier behavior |
 | `state-dir-taskgraph.test.js` | test | Legacy state dir migration |
 | `session-layout.test.js` | test | Session-scoped state layout + no project-root GOAL.md |
+| `session-compat-links-repair.test.js` | test | Repairs `.dagain/*` compat links when overwritten |
 | `session-migration.test.js` | test | Migrates legacy `.dagain/` state into `.dagain/sessions/<id>/` |
 | `status-inprogress.test.js` | test | Status in-progress rendering |
 | `templates-sync.test.js` | test | Templates sync behavior |
 | `ui-e2e.test.js` | test | End-to-end Web UI + SSE + supervisor start |
 | `ui-server.test.js` | test | Web UI server behavior |
+| `ui-static-client.test.js` | test | Static client wiring regressions (SSE -> renderer) |
 | `ui-node-human-log.test.js` | test | Node log panel shows result-derived human text |
 | `web-chat-answer-e2e.test.js` | test | Web chat `/answer` unblocks needs_human and run completes |
 | `workgraph-snapshot.test.js` | test | Workgraph snapshot behavior |

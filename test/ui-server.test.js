@@ -8,16 +8,16 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { dagainSessionTestPaths } from "./helpers/session.js";
 
-function runCli({ binPath, cwd, args }) {
+function runCli({ binPath, cwd, args, env = {} }) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [binPath, ...args], {
       cwd,
-      env: { ...process.env, NO_COLOR: "1" },
+      env: { ...process.env, NO_COLOR: "1", ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -51,6 +51,48 @@ function waitForMatch(stream, re, { timeoutMs = 10_000 } = {}) {
       stream.off("data", onData);
     }
     stream.on("data", onData);
+  });
+}
+
+function waitForUiUrl(child, { timeoutMs = 10_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    let buf = "";
+    const re = /dagain ui listening on (http:\/\/127\.0\.0\.1:\d+)/;
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timed out waiting for ui url. Output:\n${buf}`));
+    }, timeoutMs);
+    function onError(err) {
+      cleanup();
+      reject(err);
+    }
+    function onData(d) {
+      buf += String(d || "");
+      const m = buf.match(re);
+      if (m) {
+        cleanup();
+        resolve(m);
+      }
+    }
+    function onClose(code, signal) {
+      cleanup();
+      reject(new Error(`ui exited before listening (code=${code ?? "?"} signal=${signal ?? "?"}). Output:\n${buf}`));
+    }
+    function cleanup() {
+      clearTimeout(timer);
+      child.stdout?.off("data", onData);
+      child.stderr?.off("data", onData);
+      child.off("close", onClose);
+      child.off("error", onError);
+    }
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", onData);
+    child.on("close", onClose);
+    child.on("error", onError);
+
+    if (child.exitCode != null || child.signalCode != null) {
+      onClose(child.exitCode, child.signalCode);
+    }
   });
 }
 
@@ -190,7 +232,7 @@ test("ui: serves dashboard state json", async () => {
   child.stderr.setEncoding("utf8");
 
   try {
-    const m = await waitForMatch(child.stdout, /dagain ui listening on (http:\/\/127\.0\.0\.1:\d+)/);
+    const m = await waitForUiUrl(child);
     const baseUrl = m[1];
 
     const home = await httpGetText(`${baseUrl}/`);
@@ -298,6 +340,109 @@ test("ui: serves dashboard state json", async () => {
   }
 });
 
+test("ui: auto-initializes missing state.sqlite (oneshot)", async () => {
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-ui-autoinit-"));
+
+  try {
+    const res = await runCli({
+      binPath,
+      cwd: tmpDir,
+      args: ["ui", "--host", "127.0.0.1", "--port", "0"],
+      env: { DAGAIN_UI_ONESHOT: "1" },
+    });
+    assert.equal(res.code, 0, res.stderr || res.stdout);
+    assert.match(res.stdout, /dagain ui listening on http:\/\/127\.0\.0\.1:\d+/, res.stdout);
+
+    const sessionPaths = await dagainSessionTestPaths(tmpDir);
+    assert.ok(await stat(sessionPaths.dbPath), "expected state.sqlite to exist after auto-init");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("ui: /api/sessions/delete removes session", async () => {
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const binPath = path.join(repoRoot, "bin", "dagain.js");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dagain-ui-sessions-"));
+
+  const initRes = await runCli({
+    binPath,
+    cwd: tmpDir,
+    args: ["init", "--goal", "X", "--no-refine", "--force", "--no-color"],
+  });
+  assert.equal(initRes.code, 0, initRes.stderr || initRes.stdout);
+
+  const child = spawn(process.execPath, [binPath, "ui", "--host", "127.0.0.1", "--port", "0"], {
+    cwd: tmpDir,
+    env: { ...process.env, NO_COLOR: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+
+  try {
+    const m = await waitForUiUrl(child);
+    const baseUrl = m[1];
+    const home = await httpGetText(`${baseUrl}/`);
+    const tokenMatch = home.match(/__DAGAIN_TOKEN__/) ? null : home.match(/token:\s*"([^"]+)"/);
+    const uiToken = tokenMatch ? tokenMatch[1] : "";
+    assert.ok(uiToken, "expected UI token");
+
+    function httpPost(url, body) {
+      return new Promise((resolve, reject) => {
+        const reqUrl = new URL(url);
+        const data = JSON.stringify(body);
+        const postReq = http.request(
+          reqUrl,
+          { method: "POST", headers: { "content-type": "application/json", "x-dagain-token": uiToken } },
+          (postRes) => {
+            let buf = "";
+            postRes.setEncoding("utf8");
+            postRes.on("data", (d) => (buf += d));
+            postRes.on("end", () => {
+              try {
+                resolve(JSON.parse(buf));
+              } catch (e) {
+                reject(e);
+              }
+            });
+          },
+        );
+        postReq.on("error", reject);
+        postReq.end(data);
+      });
+    }
+
+    const before = await httpGetJson(`${baseUrl}/api/sessions`);
+    assert.ok(before && before.ok);
+    assert.ok(Array.isArray(before.sessions));
+
+    const created = await httpPost(`${baseUrl}/api/sessions/new`, {});
+    assert.ok(created && created.ok);
+
+    const afterCreate = await httpGetJson(`${baseUrl}/api/sessions`);
+    assert.ok(Array.isArray(afterCreate.sessions));
+    assert.ok(afterCreate.sessions.length >= 2, "expected at least 2 sessions after create");
+
+    const currentId = String(afterCreate.currentId || "");
+    const toDelete = afterCreate.sessions.map((s) => String(s?.id || "")).find((id) => id && id !== currentId);
+    assert.ok(toDelete, "expected a non-current session to delete");
+
+    const delRes = await httpPost(`${baseUrl}/api/sessions/delete`, { id: toDelete });
+    assert.ok(delRes && delRes.ok, delRes?.error || "expected delete ok");
+
+    const afterDelete = await httpGetJson(`${baseUrl}/api/sessions`);
+    const ids = afterDelete.sessions.map((s) => String(s?.id || ""));
+    assert.ok(!ids.includes(toDelete), "expected deleted session to be removed from listing");
+  } finally {
+    child.kill("SIGTERM");
+    await new Promise((resolve) => child.on("close", () => resolve()));
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("ui: /api/control/start works with stale supervisor lock", async () => {
   const repoRoot = fileURLToPath(new URL("..", import.meta.url));
   const binPath = path.join(repoRoot, "bin", "dagain.js");
@@ -361,7 +506,7 @@ test("ui: /api/control/start works with stale supervisor lock", async () => {
   child.stderr.setEncoding("utf8");
 
   try {
-    const m = await waitForMatch(child.stdout, /dagain ui listening on (http:\/\/127\.0\.0\.1:\d+)/);
+    const m = await waitForUiUrl(child);
     const baseUrl = m[1];
     const home = await httpGetText(`${baseUrl}/`);
     const tokenMatch = home.match(/__DAGAIN_TOKEN__/) ? null : home.match(/token:\s*"([^"]+)"/);
