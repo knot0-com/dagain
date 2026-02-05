@@ -293,6 +293,11 @@ function initCytoscape() {
     }
   });
 
+  // Track user pan/zoom interactions
+  cy.on("pan zoom", function() {
+    userMovedView = true;
+  });
+
   // Update zoom display on zoom changes
   cy.on("zoom", function() {
     const zoomPct = Math.round(cy.zoom() * 100);
@@ -313,6 +318,9 @@ function initCytoscape() {
   }
 }
 
+let lastCyNodeIds = "";
+let cyFirstRender = true;
+
 function renderCytoscape(snapshot) {
   if (!cy) initCytoscape();
 
@@ -320,6 +328,11 @@ function renderCytoscape(snapshot) {
 
   const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
   console.log("[Cytoscape] nodes count:", nodes.length);
+
+  // Check if structure changed (different set of node IDs)
+  const currentNodeIds = nodes.map(n => n && n.id ? n.id : "").sort().join(",");
+  const structureChanged = currentNodeIds !== lastCyNodeIds;
+  lastCyNodeIds = currentNodeIds;
   const nextId = snapshot && snapshot.next && snapshot.next.id ? snapshot.next.id : "";
 
   // Build node and edge elements for Cytoscape
@@ -385,9 +398,11 @@ function renderCytoscape(snapshot) {
     cy.add(elements);
   });
 
-  // Run dagre layout (must be outside batch)
-  if (cy.nodes().length > 0) {
-    console.log("[Cytoscape] Running dagre layout for", cy.nodes().length, "nodes");
+  // Run dagre layout only when structure changes
+  if (cy.nodes().length > 0 && structureChanged) {
+    console.log("[Cytoscape] Running dagre layout for", cy.nodes().length, "nodes (structure changed)");
+    const shouldFit = cyFirstRender || !userMovedView;
+    cyFirstRender = false;
     try {
       cy.layout({
         name: "dagre",
@@ -396,7 +411,7 @@ function renderCytoscape(snapshot) {
         rankSep: 80,
         edgeSep: 20,
         ranker: "network-simplex",
-        fit: true,
+        fit: shouldFit,
         padding: 40,
         animate: false
       }).run();
@@ -404,8 +419,24 @@ function renderCytoscape(snapshot) {
     } catch (err) {
       console.error("[Cytoscape] Layout error:", err);
       // Fallback to preset layout
-      cy.layout({ name: "preset", fit: true, padding: 40 }).run();
+      cy.layout({ name: "preset", fit: shouldFit, padding: 40 }).run();
     }
+  } else if (cy.nodes().length > 0) {
+    // Just update classes without re-layout
+    console.log("[Cytoscape] Updating node classes only (no structure change)");
+    cy.batch(() => {
+      const nextId = snapshot && snapshot.next && snapshot.next.id ? snapshot.next.id : "";
+      for (const n of nodes) {
+        if (!n || !n.id) continue;
+        const cyNode = cy.getElementById(n.id);
+        if (!cyNode.length) continue;
+        const status = statusKey(n);
+        // Remove old status classes and add new ones
+        cyNode.removeClass("open in_progress done failed needs_human next");
+        cyNode.addClass(status);
+        if (n.id === nextId) cyNode.addClass("next");
+      }
+    });
   } else {
     console.log("[Cytoscape] No nodes to layout");
   }
@@ -2539,10 +2570,22 @@ if (typeof ResizeObserver !== "undefined") {
 
 if (btnChatSend) btnChatSend.onclick = () => sendChat();
 if (inpChat) {
+  // Auto-resize textarea as user types
+  function autoResizeChat() {
+    inpChat.style.height = "auto";
+    inpChat.style.height = Math.min(inpChat.scrollHeight, 200) + "px";
+  }
+  inpChat.addEventListener("input", autoResizeChat);
+
+  // Send on Ctrl+Enter or Cmd+Enter
   inpChat.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") {
+    if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
       ev.preventDefault();
       sendChat();
+      // Reset height after sending
+      setTimeout(() => {
+        inpChat.style.height = "auto";
+      }, 10);
     }
   });
 }

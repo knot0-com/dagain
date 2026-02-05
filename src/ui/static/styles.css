@@ -684,7 +684,14 @@ body.hideSelection #selectionCard { display: none; }
   width: 5px; height: 5px; border-radius: 50%;
   background: var(--cyan); flex-shrink: 0;
 }
-.chatText { white-space: pre-wrap; color: var(--text); line-height: 1.45; font-size: 13px; }
+.chatText {
+  white-space: pre-wrap;
+  color: var(--text);
+  line-height: 1.45;
+  font-size: 13px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
 
 /* Chat markdown */
 .chatText code {
@@ -705,7 +712,7 @@ body.hideSelection #selectionCard { display: none; }
 
 /* Chat composer */
 .chatComposer {
-  display: flex; align-items: center; gap: 0;
+  display: flex; align-items: flex-end; gap: 0;
   border-top: 1px solid var(--border);
   padding: 10px 12px;
   background: rgba(0,0,0,0.12);
@@ -722,6 +729,11 @@ body.hideSelection #selectionCard { display: none; }
   color: var(--text);
   outline: none;
   transition: border-color 160ms ease, box-shadow 160ms ease;
+  resize: none;
+  min-height: 40px;
+  max-height: 200px;
+  overflow-y: auto;
+  line-height: 1.4;
 }
 .chatComposerInput::placeholder { color: var(--muted2); }
 .chatComposerInput:focus {
@@ -730,7 +742,8 @@ body.hideSelection #selectionCard { display: none; }
 }
 .chatComposerSend {
   display: flex; align-items: center; justify-content: center;
-  width: 42px; height: 40px;
+  width: 42px; min-height: 40px;
+  align-self: stretch;
   border: 1px solid var(--border);
   border-left: none;
   border-radius: 0 12px 12px 0;
